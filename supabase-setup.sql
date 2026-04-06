@@ -1,5 +1,5 @@
 -- ============================================================
--- PAPAMIKE QUESTOES - Setup inicial seguro (Supabase)
+-- PROVA MAX - Setup inicial seguro (Supabase)
 -- ============================================================
 
 -- 1. DISCIPLINES

@@ -28,8 +28,8 @@ export function Login() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold">PapaMike Questões</h1>
-          <p className="text-muted-foreground mt-1">Estude com questões dos seus módulos</p>
+          <h1 className="text-2xl font-bold">Prova Max</h1>
+          <p className="text-muted-foreground mt-1">Questões Inéditas para concurso da ALE-RR</p>
         </div>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>

@@ -1,5 +1,5 @@
 -- ============================================================
--- PAPAMIKE QUESTÕES — Setup Multi-Usuário
+-- PROVA MAX — Setup Multi-Usuário
 -- Execute no SQL Editor do Supabase
 -- ============================================================
 

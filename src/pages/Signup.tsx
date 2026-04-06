@@ -33,7 +33,7 @@ export function Signup() {
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-bold">Criar conta</h1>
-          <p className="text-muted-foreground mt-1">PapaMike Questões</p>
+          <p className="text-muted-foreground mt-1">Questões Inéditas para concurso da ALE-RR</p>
         </div>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>

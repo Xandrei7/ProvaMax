@@ -50,7 +50,7 @@ export function Home() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <Header title="PapaMike Questões" subtitle="Selecione uma matéria para estudar" />
+      <Header title="Prova Max" subtitle="Selecione uma matéria para estudar" />
       <main className="mx-auto w-full max-w-lg flex-1 px-4 py-4 pb-24">
         {loading ? (
           <div className="flex justify-center py-12">
