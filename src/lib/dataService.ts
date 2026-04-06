@@ -232,17 +232,24 @@ async function ensureAdminProfile(authUser: AuthUserLike, normalizedEmail: strin
     return data as Profile
   }
 
-  const patch: Partial<Profile> = {
-    email: normalizedEmail,
-    name: currentProfile.name || getSafeName(authUser, normalizedEmail),
-    role: 'admin',
-    status: 'approved',
-    suspended_at: null,
-    updated_at: now,
-    is_validated: true,
-  }
+  // Only patch what actually needs to change.
+  // NEVER include updated_at unconditionally — doing so would write on every
+  // call, triggering Supabase Realtime, which calls this function again,
+  // creating an infinite write→Realtime→write loop.
+  const patch: Partial<Profile> & { updated_at?: string } = {}
 
-  if (!currentProfile.approved_at) patch.approved_at = now
+  if (currentProfile.email !== normalizedEmail)    patch.email = normalizedEmail
+  if (!currentProfile.name?.trim())                patch.name  = getSafeName(authUser, normalizedEmail)
+  if (currentProfile.role !== 'admin')             patch.role  = 'admin' as const
+  if (currentProfile.status !== 'approved')        patch.status = 'approved' as const
+  if (currentProfile.suspended_at !== null)        patch.suspended_at = null
+  if (!currentProfile.is_validated)               patch.is_validated = true
+  if (!currentProfile.approved_at)                patch.approved_at  = now
+
+  // Nothing to do — profile is already in the correct state
+  if (Object.keys(patch).length === 0) return currentProfile
+
+  patch.updated_at = now
 
   const { data, error } = await supabase
     .from('profiles')

@@ -172,7 +172,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAuthLoading(false)
 
       if (nextUser) {
-        void resolveAuthorization(nextUser, `auth_state:${event}`)
+        // TOKEN_REFRESHED only renews the JWT — the profile/status didn't change.
+        // Running it non-silent would set profileLoading=true and flash the Spinner.
+        const silent = event === 'TOKEN_REFRESHED'
+        void resolveAuthorization(nextUser, `auth_state:${event}`, silent)
       } else {
         clearAuthorizationState()
       }
