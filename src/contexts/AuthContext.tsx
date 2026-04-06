@@ -50,7 +50,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profileLoading, setProfileLoading] = useState(true)
   const [authorizationReason, setAuthorizationReason] = useState<AuthorizationDecisionReason>('authorization_loading')
   const [authorizationMessage, setAuthorizationMessage] = useState('Verificando autorizacao...')
+
+  // Tracks the in-flight resolve run; stale runs are discarded.
   const authorizationRunRef = useRef(0)
+
+  // Always holds the latest user object so background callbacks don't use
+  // a stale closure from when the effect was registered.
+  const latestUserRef = useRef<User | null>(null)
+  latestUserRef.current = user
+
+  // ── helpers ────────────────────────────────────────────────────────────────
 
   const clearAuthorizationState = useCallback(() => {
     authorizationRunRef.current += 1
@@ -62,13 +71,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfileLoading(false)
   }, [])
 
-  const resolveAuthorization = useCallback(async (currentUser: User, source: string, silent = false) => {
+  /**
+   * Resolves the user's authorization by reading/writing the profiles table.
+   *
+   * silent=true  → background check (polling, focus, realtime).
+   *               Does NOT touch profileLoading, so ProtectedRoute never
+   *               unmounts its children. On error, keeps last-known-good state.
+   *
+   * silent=false → foreground check (initial load, explicit sign-in).
+   *               Sets profileLoading=true so the Spinner shows until resolved.
+   */
+  const resolveAuthorization = useCallback(async (
+    currentUser: User,
+    source: string,
+    silent = false,
+  ) => {
     const runId = ++authorizationRunRef.current
     const normalized = normalizeEmail(currentUser.email)
 
-    // Silent refreshes (polling, realtime, focus) do NOT set profileLoading=true.
-    // That flag toggles authorizationResolved, which unmounts ProtectedRoute children
-    // and causes the apparent "page refresh" every ~5 s.
     if (!silent) {
       setProfileLoading(true)
       setAuthorizationReason('authorization_loading')
@@ -114,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (authorizationRunRef.current !== runId) return
 
       console.error('Erro ao resolver autorizacao:', error)
-      // On silent refresh errors, don't clear state — keep last known good values
+
       if (!silent) {
         setProfile(null)
         setIsAdmin(false)
@@ -140,100 +160,103 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // ── EFFECT 1: auth state only ──────────────────────────────────────────────
+  // Runs once. Sets session/user/authLoading from Supabase Auth.
+  // Does NOT call resolveAuthorization here — that is handled by Effect 2,
+  // which is keyed on user.id and therefore immune to TOKEN_REFRESHED churn.
   useEffect(() => {
-    let mounted = true
-
-    const bootstrap = async () => {
-      setAuthLoading(true)
-      setProfileLoading(true)
-
-      const { data: { session: currentSession } } = await supabase.auth.getSession()
-
-      if (!mounted) return
-
-      setSession(currentSession)
-      const currentUser = currentSession?.user ?? null
-      setUser(currentUser)
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s)
+      setUser(s?.user ?? null)
       setAuthLoading(false)
-
-      if (currentUser) {
-        await resolveAuthorization(currentUser, 'initial_session')
-      } else {
-        clearAuthorizationState()
-      }
-    }
-
-    void bootstrap()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      setSession(nextSession)
-      const nextUser = nextSession?.user ?? null
-      setUser(nextUser)
-      setAuthLoading(false)
-
-      if (nextUser) {
-        // TOKEN_REFRESHED only renews the JWT — the profile/status didn't change.
-        // Running it non-silent would set profileLoading=true and flash the Spinner.
-        const silent = event === 'TOKEN_REFRESHED'
-        void resolveAuthorization(nextUser, `auth_state:${event}`, silent)
-      } else {
-        clearAuthorizationState()
-      }
     })
 
-    return () => {
-      mounted = false
-      subscription.unsubscribe()
-    }
-  }, [clearAuthorizationState, resolveAuthorization])
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s)
+      setUser(s?.user ?? null)
+      setAuthLoading(false)
+    })
 
+    return () => subscription.unsubscribe()
+  }, []) // runs exactly once
+
+  // ── EFFECT 2: profile resolution ───────────────────────────────────────────
+  // Fires only when the user's identity changes (sign-in / sign-out).
+  // TOKEN_REFRESHED keeps the same user.id → this effect does NOT re-run,
+  // so there is no profileLoading flash from routine JWT renewal.
+  useEffect(() => {
+    if (authLoading) return // wait for auth to settle first
+
+    if (!user) {
+      clearAuthorizationState()
+      return
+    }
+
+    void resolveAuthorization(user, 'user_id_change', false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, authLoading]) // intentionally excludes full user object
+
+  // ── EFFECT 3: background silent refresh ────────────────────────────────────
+  // Polls every 60 s and on tab focus to pick up admin status changes.
+  // Uses user.id as dep (not the full user object) so TOKEN_REFRESHED does
+  // NOT cancel and re-register the interval or the focus listener.
+  // Uses latestUserRef so the callback always has the current user object.
   useEffect(() => {
     if (!user) return
 
     const refresh = () => {
-      // silent=true: does not set profileLoading, avoiding unmount of ProtectedRoute children
-      void resolveAuthorization(user, 'visibility_refresh', true)
+      const u = latestUserRef.current
+      if (u) void resolveAuthorization(u, 'background_refresh', true)
     }
 
-    const intervalId = window.setInterval(refresh, 30000)
+    const id = window.setInterval(refresh, 60_000)
     window.addEventListener('focus', refresh)
 
     return () => {
-      window.clearInterval(intervalId)
+      window.clearInterval(id)
       window.removeEventListener('focus', refresh)
     }
-  }, [user, resolveAuthorization])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]) // intentionally excludes full user object
 
+  // ── EFFECT 4: realtime profile changes ─────────────────────────────────────
+  // Subscribes to DB changes on this user's profile row.
+  // Fires a silent resolve so the app reacts to admin approval/suspension
+  // without unmounting the current page.
+  // Uses user.id as dep so the channel is NOT torn down on TOKEN_REFRESHED.
   useEffect(() => {
     if (!user) return
 
+    const userId = user.id
+
     const channel = supabase
-      .channel(`profile_status_${user.id}`)
+      .channel(`profile_status_${userId}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
           table: 'profiles',
-          filter: `user_id=eq.${user.id}`,
+          filter: `user_id=eq.${userId}`,
         },
         () => {
-          void resolveAuthorization(user, 'realtime_profile_change', true)
+          const u = latestUserRef.current
+          if (u) void resolveAuthorization(u, 'realtime_profile_change', true)
         },
       )
       .subscribe()
 
-    return () => {
-      void supabase.removeChannel(channel)
-    }
-  }, [user, resolveAuthorization])
+    return () => { void supabase.removeChannel(channel) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]) // intentionally excludes full user object
+
+  // ── auth actions ───────────────────────────────────────────────────────────
 
   async function signIn(email: string, password: string) {
     const { error } = await supabase.auth.signInWithPassword({
       email: normalizeEmail(email),
       password,
     })
-
     if (error) throw error
   }
 
@@ -243,13 +266,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password,
       options: { data: { name } },
     })
-
     if (error) throw error
   }
 
   async function signOut() {
     await supabase.auth.signOut()
   }
+
+  // ── derived ────────────────────────────────────────────────────────────────
 
   const loading = authLoading || profileLoading
   const authorizationResolved = !authLoading && !profileLoading
