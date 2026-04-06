@@ -62,12 +62,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfileLoading(false)
   }, [])
 
-  const resolveAuthorization = useCallback(async (currentUser: User, source: string) => {
+  const resolveAuthorization = useCallback(async (currentUser: User, source: string, silent = false) => {
     const runId = ++authorizationRunRef.current
     const normalized = normalizeEmail(currentUser.email)
 
-    setProfileLoading(true)
-    setAuthorizationReason('authorization_loading')
+    // Silent refreshes (polling, realtime, focus) do NOT set profileLoading=true.
+    // That flag toggles authorizationResolved, which unmounts ProtectedRoute children
+    // and causes the apparent "page refresh" every ~5 s.
+    if (!silent) {
+      setProfileLoading(true)
+      setAuthorizationReason('authorization_loading')
+    }
 
     logAuthorization({
       authUserId: currentUser.id,
@@ -109,11 +114,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (authorizationRunRef.current !== runId) return
 
       console.error('Erro ao resolver autorizacao:', error)
-      setProfile(null)
-      setIsAdmin(false)
-      setIsValidated(false)
-      setAuthorizationReason('waiting_profile_resolution')
-      setAuthorizationMessage('Nao foi possivel validar seu acesso agora. Tente novamente.')
+      // On silent refresh errors, don't clear state — keep last known good values
+      if (!silent) {
+        setProfile(null)
+        setIsAdmin(false)
+        setIsValidated(false)
+        setAuthorizationReason('waiting_profile_resolution')
+        setAuthorizationMessage('Nao foi possivel validar seu acesso agora. Tente novamente.')
+      }
 
       logAuthorization({
         authUserId: currentUser.id,
@@ -126,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         source,
       })
     } finally {
-      if (authorizationRunRef.current === runId) {
+      if (!silent && authorizationRunRef.current === runId) {
         setProfileLoading(false)
       }
     }
@@ -180,10 +188,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return
 
     const refresh = () => {
-      void resolveAuthorization(user, 'visibility_refresh')
+      // silent=true: does not set profileLoading, avoiding unmount of ProtectedRoute children
+      void resolveAuthorization(user, 'visibility_refresh', true)
     }
 
-    const intervalId = window.setInterval(refresh, 5000)
+    const intervalId = window.setInterval(refresh, 30000)
     window.addEventListener('focus', refresh)
 
     return () => {
@@ -206,7 +215,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           filter: `user_id=eq.${user.id}`,
         },
         () => {
-          void resolveAuthorization(user, 'realtime_profile_change')
+          void resolveAuthorization(user, 'realtime_profile_change', true)
         },
       )
       .subscribe()
