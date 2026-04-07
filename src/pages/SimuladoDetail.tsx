@@ -9,8 +9,10 @@ import {
   getQuestionsByIds,
   getDisciplines,
   getSubjects,
+  generateFlashcard,
 } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
+import { useAuth } from '@/contexts/AuthContext'
 import { cn, normalizeAnswer, displayAnswer } from '@/lib/utils'
 import type { SimuladoRecord, SimuladoQuestion, Question, Discipline, Subject } from '@/types'
 
@@ -189,6 +191,7 @@ export function SimuladoDetail() {
   const { simuladoId } = useParams<{ simuladoId: string }>()
   const navigate = useNavigate()
   const { recordAnswer } = useStudy()
+  const { user } = useAuth()
 
   const [simulado, setSimulado] = useState<SimuladoRecord | null>(null)
   const [simQs, setSimQs] = useState<SimuladoQuestion[]>([])
@@ -203,11 +206,15 @@ export function SimuladoDetail() {
   const [reviewAnswers, setReviewAnswers] = useState<ReviewAnswer[]>([])
 
   useEffect(() => {
-    if (!simuladoId) return
+    if (!simuladoId || !user) return
+
+    const currentSimuladoId = simuladoId
+    const currentUserId = user.id
+
     async function load() {
       const [sim, sqs, discs, subs] = await Promise.all([
-        getSimuladoById(simuladoId!),
-        getSimuladoQuestions(simuladoId!),
+        getSimuladoById(currentSimuladoId, currentUserId),
+        getSimuladoQuestions(currentSimuladoId, currentUserId),
         getDisciplines(),
         getSubjects(),
       ])
@@ -224,7 +231,7 @@ export function SimuladoDetail() {
       setLoading(false)
     }
     load()
-  }, [simuladoId, navigate])
+  }, [simuladoId, user, navigate])
 
   if (loading || !simulado) {
     return (
@@ -234,6 +241,7 @@ export function SimuladoDetail() {
     )
   }
 
+  const currentSimulado = simulado
   // Recompute wrong questions using normalized snapshot comparison.
   // Never trust the stored is_correct — recompute from selected_answer vs correct_answer.
   // Passa o tipo da questão para distinguir C/E de múltipla escolha vs certo/errado.
@@ -316,6 +324,15 @@ export function SimuladoDetail() {
         answeredAt: new Date().toISOString(),
       })
 
+      if (!isCorrect) {
+        generateFlashcard({
+          question: reviewQ,
+          selectedAnswer: selected,
+          sourceType: 'review',
+          simuladoId: currentSimulado.id,
+        }).catch(console.error)
+      }
+
       if (reviewIndex < wrongItems.length - 1) {
         setReviewIndex(i => i + 1)
       } else {
@@ -334,7 +351,7 @@ export function SimuladoDetail() {
           </button>
           <div className="flex-1">
             <p className="text-sm font-semibold">Revisando erros</p>
-            <p className="text-xs text-muted-foreground truncate">{simulado.title}</p>
+            <p className="text-xs text-muted-foreground truncate">{currentSimulado.title}</p>
           </div>
           <span className="text-xs text-muted-foreground">{reviewIndex + 1}/{wrongItems.length}</span>
         </div>

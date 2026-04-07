@@ -3,7 +3,7 @@ import { XCircle, RotateCcw } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { QuestionCard } from '@/components/QuestionCard'
-import { getQuestions } from '@/lib/dataService'
+import { generateFlashcard, getQuestions } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
 import type { Question, UserAnswer } from '@/types'
 
@@ -61,6 +61,14 @@ export function Errors() {
     }
     recordAnswer(answer)
     setSubmitted(true)
+
+    if (!answer.isCorrect) {
+      generateFlashcard({
+        question: q,
+        selectedAnswer: selected,
+        sourceType: 'review',
+      }).catch(console.error)
+    }
   }, [selected, questions, currentIndex, submitted, recordAnswer])
 
   const currentQuestion = questions[currentIndex]

@@ -71,6 +71,7 @@ function AppRoutes() {
       <Route path="/study/:subjectId/complete" element={<ProtectedRoute><StudyComplete /></ProtectedRoute>} />
       <Route path="/study-discipline/:disciplineId" element={<ProtectedRoute><StudyMode /></ProtectedRoute>} />
       <Route path="/flashcards" element={<ProtectedRoute><Flashcards /></ProtectedRoute>} />
+      <Route path="/favorites" element={<Navigate to="/flashcards" replace />} />
       <Route path="/errors" element={<ProtectedRoute><Errors /></ProtectedRoute>} />
       <Route path="/stats" element={<ProtectedRoute><Stats /></ProtectedRoute>} />
       <Route path="/simulado" element={<ProtectedRoute><Simulado /></ProtectedRoute>} />
