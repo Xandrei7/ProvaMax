@@ -73,7 +73,7 @@ export interface DisciplineProgress {
   correctAnswers: number
 }
 
-export type StudyMode = 'sequential' | 'random' | 'discipline' | 'favorites' | 'errors'
+export type StudyMode = 'sequential' | 'random' | 'discipline' | 'errors'
 
 export interface SimuladoRecord {
   id: string
@@ -121,6 +121,8 @@ export interface Flashcard {
   times_wrong: number
   last_reviewed_at: string | null
   next_review_at: string | null
+  interval_days: number
+  ease_factor: number
   created_at: string
   updated_at: string
 }

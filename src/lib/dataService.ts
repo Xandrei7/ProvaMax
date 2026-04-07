@@ -660,7 +660,7 @@ export async function saveSimulado({
   await renumberSimulados(userId)
 
   // Return the fetched renumbered version
-  return (await getSimuladoById(simulado.id)) as SimuladoRecord
+  return (await getSimuladoById(simulado.id, userId)) as SimuladoRecord
 }
 
 export async function deleteSimulado(userId: string, simuladoId: string): Promise<void> {
@@ -709,18 +709,22 @@ export async function getSimulados(userId: string): Promise<SimuladoRecord[]> {
   return (data ?? []) as SimuladoRecord[]
 }
 
-export async function getSimuladoById(simuladoId: string): Promise<SimuladoRecord | null> {
+export async function getSimuladoById(simuladoId: string, userId: string): Promise<SimuladoRecord | null> {
   const { data, error } = await supabase
     .from('simulados')
     .select('*')
     .eq('id', simuladoId)
+    .eq('user_id', userId)
     .maybeSingle()
 
   if (error) throw error
   return (data as SimuladoRecord | null) ?? null
 }
 
-export async function getSimuladoQuestions(simuladoId: string): Promise<SimuladoQuestion[]> {
+export async function getSimuladoQuestions(simuladoId: string, userId: string): Promise<SimuladoQuestion[]> {
+  const simulado = await getSimuladoById(simuladoId, userId)
+  if (!simulado) return []
+
   const { data, error } = await supabase
     .from('simulado_questions')
     .select('*')
@@ -732,43 +736,147 @@ export async function getSimuladoQuestions(simuladoId: string): Promise<Simulado
 
 // -- FLASHCARDS ---------------------------------------------------------------
 
+const flashcardGenerationInFlight = new Map<string, Promise<boolean>>()
+
+export type FlashcardReviewAction = 'correct' | 'easy' | 'wrong' | 'skip' | 'mastered'
+
+function resolveFlashcardEndpoint(route: 'generate-flashcard' | 'generate-flashcards-from-errors') {
+  const explicitSingleEndpoint = (import.meta.env.VITE_FLASHCARD_API_URL as string | undefined)?.trim()
+  if (route === 'generate-flashcard' && explicitSingleEndpoint) {
+    return explicitSingleEndpoint
+  }
+
+  if (explicitSingleEndpoint?.includes('/generate-flashcard')) {
+    const inferredBase = explicitSingleEndpoint.replace(/\/generate-flashcard\/?$/, '')
+    if (inferredBase) {
+      return `${inferredBase}/${route}`
+    }
+  }
+
+  const baseEndpoint = (import.meta.env.VITE_FLASHCARD_API_BASE_URL as string | undefined)?.trim()
+  if (baseEndpoint) {
+    return `${baseEndpoint.replace(/\/$/, '')}/${route}`
+  }
+
+  return `/api/${route}`
+}
+
+export interface GenerateFromErrorsResult {
+  generated: number
+  skipped: number
+  failed: number
+  total_candidates: number
+}
+
 export async function generateFlashcard(params: {
   question: Question
   selectedAnswer: string
-  sourceType: 'study' | 'simulado'
+  sourceType: 'study' | 'simulado' | 'review' | 'import'
   simuladoId?: string
 }): Promise<boolean> {
+  const requestKey = `${params.question.id}:${params.sourceType}:${params.simuladoId ?? 'none'}`
+  const runningRequest = flashcardGenerationInFlight.get(requestKey)
+  if (runningRequest) {
+    return runningRequest
+  }
+
+  const request = (async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      const userId = sessionData?.session?.user?.id
+
+      if (!token || !userId) {
+        return false
+      }
+
+      const endpoint = resolveFlashcardEndpoint('generate-flashcard')
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          question_id: params.question.id,
+          bank: 'FCC',
+          question_type: params.question.type,
+          statement: params.question.statement,
+          alternatives: params.question.options,
+          correct_answer: params.question.correct_answer,
+          source_type: params.sourceType,
+          simulado_id: params.simuladoId,
+          discipline_id: params.question.discipline_id,
+          subject_id: params.question.subject_id,
+          user_wrong_answer: params.selectedAnswer,
+          explanation: params.question.comment,
+          legal_basis: params.question.legal_basis,
+        }),
+      })
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        console.error(`[generateFlashcard] HTTP ${response.status} ${errText}`)
+        return false
+      }
+
+      await response.json().catch(() => ({}))
+      return true
+    } catch (error) {
+      console.error('[generateFlashcard] Erro inesperado no frontend:', error)
+      return false
+    }
+  })()
+
+  flashcardGenerationInFlight.set(requestKey, request)
+  try {
+    return await request
+  } finally {
+    flashcardGenerationInFlight.delete(requestKey)
+  }
+}
+
+export async function generateFlashcardsFromErrors(limit = 5): Promise<GenerateFromErrorsResult | null> {
   try {
     const { data: sessionData } = await supabase.auth.getSession()
     const token = sessionData?.session?.access_token
 
-    if (!token) return false
+    if (!token) {
+      return null
+    }
 
-    const response = await fetch('/api/generate-flashcard', {
+    const endpoint = resolveFlashcardEndpoint('generate-flashcards-from-errors')
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        question_id: params.question.id,
-        source_type: params.sourceType,
-        simulado_id: params.simuladoId,
-        discipline_id: params.question.discipline_id,
-        subject_id: params.question.subject_id,
-        statement: params.question.statement,
-        options: params.question.options,
-        correct_answer: params.question.correct_answer,
-        user_wrong_answer: params.selectedAnswer,
-        comment: params.question.comment,
-        legal_basis: params.question.legal_basis
-      })
+      body: JSON.stringify({ limit }),
     })
 
-    return response.ok
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '')
+      console.error(`[generateFlashcardsFromErrors] HTTP ${response.status} ${errText}`)
+      return null
+    }
+
+    const payload = await response.json().catch(() => null)
+    if (!payload || typeof payload !== 'object') {
+      return null
+    }
+
+    return {
+      generated: Number((payload as { generated?: unknown }).generated) || 0,
+      skipped: Number((payload as { skipped?: unknown }).skipped) || 0,
+      failed: Number((payload as { failed?: unknown }).failed) || 0,
+      total_candidates: Number((payload as { total_candidates?: unknown }).total_candidates) || 0,
+    }
   } catch (error) {
-    console.error('[generateFlashcard] Erro:', error)
-    return false
+    console.error('[generateFlashcardsFromErrors] Erro inesperado no frontend:', error)
+    return null
   }
 }
 
@@ -784,39 +892,86 @@ export async function getFlashcards(userId: string): Promise<Flashcard[]> {
   return (data ?? []) as Flashcard[]
 }
 
-export async function updateFlashcardReview(id: string, isCorrect: boolean): Promise<void> {
+// --- MODO ELITE: Algoritmo Anki SRS ---
+
+function addDays(base: Date, days: number): string {
+  const next = new Date(base)
+  next.setDate(next.getDate() + Math.round(days))
+  return next.toISOString()
+}
+
+function addHours(base: Date, hours: number): string {
+  const next = new Date(base)
+  next.setHours(next.getHours() + hours)
+  return next.toISOString()
+}
+
+export async function reviewFlashcard(id: string, action: FlashcardReviewAction, userId: string): Promise<Flashcard> {
   const { data: flashcard, error: fetchError } = await supabase
     .from('flashcards')
     .select('*')
     .eq('id', id)
+    .eq('user_id', userId)
     .single()
 
-  if (fetchError || !flashcard) return
+  if (fetchError || !flashcard) {
+    throw fetchError ?? new Error('Flashcard nao encontrado')
+  }
 
+  const now = new Date()
   const timesSeen = (flashcard.times_seen || 0) + 1
   let timesCorrect = flashcard.times_correct || 0
   let timesWrong = flashcard.times_wrong || 0
   let priority = flashcard.priority || 1
-  let status = flashcard.status
+  let status: Flashcard['status'] = flashcard.status
+  let intervalDays: number = flashcard.interval_days ?? 1
+  let easeFactor: number = flashcard.ease_factor ?? 2.5
+  let nextReviewAt: string
 
-  if (isCorrect) {
+  if (action === 'easy') {
+    // Acertou com facilidade: aumenta ease_factor e dobra intervalo
     timesCorrect++
+    easeFactor = Math.min(easeFactor + 0.15, 3.0)
+    intervalDays = Math.max(1, Math.round(intervalDays * easeFactor * 1.3))
+    nextReviewAt = addDays(now, intervalDays)
+    priority = Math.max(1, priority - 2)
+    const difficultyScore = timesWrong / (timesCorrect + timesWrong)
+    status = timesCorrect >= 3 && difficultyScore < 0.3 ? 'mastered' : 'reviewing'
+
+  } else if (action === 'correct') {
+    // Acertou normalmente: aplica Anki SRS
+    timesCorrect++
+    intervalDays = Math.max(1, Math.round(intervalDays * easeFactor))
+    nextReviewAt = addDays(now, intervalDays)
     priority = Math.max(1, priority - 1)
-    if (timesCorrect > 2 && timesCorrect > timesWrong) {
-      status = 'mastered'
-    }
-  } else {
+    const difficultyScore = timesWrong / (timesCorrect + timesWrong)
+    status = timesCorrect >= 3 && difficultyScore < 0.3 ? 'mastered' : 'reviewing'
+
+  } else if (action === 'wrong') {
+    // Errou: REGRA CRÍTICA - volta rapidamente (1 dia), ease_factor cai
     timesWrong++
-    priority += 2
+    intervalDays = 1
+    easeFactor = Math.max(1.3, easeFactor - 0.2)
+    nextReviewAt = addDays(now, 1)
+    priority = Math.min(priority + 2, 100)
     status = 'reviewing'
+
+  } else if (action === 'skip') {
+    // Pulou: volta em 4h sem penalidade
+    nextReviewAt = addHours(now, 4)
+    priority = Math.min(priority + 1, 100)
+    if (status === 'mastered') status = 'reviewing'
+
+  } else {
+    // mastered manual: intervalo longo de 21 dias
+    status = 'mastered'
+    intervalDays = 21
+    easeFactor = Math.min(easeFactor + 0.1, 3.0)
+    nextReviewAt = addDays(now, 21)
+    priority = Math.max(1, priority - 2)
   }
 
-  // Simplified spaced repetition delay
-  const delayHours = isCorrect ? (timesCorrect * 24) : 1
-  const nextReviewAt = new Date()
-  nextReviewAt.setHours(nextReviewAt.getHours() + delayHours)
-
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from('flashcards')
     .update({
       times_seen: timesSeen,
@@ -824,12 +979,22 @@ export async function updateFlashcardReview(id: string, isCorrect: boolean): Pro
       times_wrong: timesWrong,
       priority,
       status,
-      last_reviewed_at: new Date().toISOString(),
-      next_review_at: nextReviewAt.toISOString(),
-      updated_at: new Date().toISOString()
+      interval_days: intervalDays,
+      ease_factor: easeFactor,
+      last_reviewed_at: now.toISOString(),
+      next_review_at: nextReviewAt,
+      updated_at: now.toISOString(),
     })
     .eq('id', id)
+    .eq('user_id', userId)
+    .select('*')
+    .single()
 
   if (error) throw error
+  return updated as Flashcard
+}
+
+export async function updateFlashcardReview(id: string, isCorrect: boolean, userId: string): Promise<Flashcard> {
+  return reviewFlashcard(id, isCorrect ? 'correct' : 'wrong', userId)
 }
 
