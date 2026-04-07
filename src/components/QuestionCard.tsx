@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Heart, Flag, ChevronDown, ChevronUp, Bookmark, Lightbulb } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Flag, ChevronDown, ChevronUp, Bookmark, Lightbulb } from 'lucide-react'
+import { cn, normalizeAnswer, displayAnswer } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
-import { useStudy } from '@/contexts/StudyContext'
 import { submitReport } from '@/lib/dataService'
 import { toast } from 'sonner'
 import type { Question } from '@/types'
@@ -38,7 +37,6 @@ export function QuestionCard({
   isLast,
 }: QuestionCardProps) {
   const { user } = useAuth()
-  const { toggleFavorite, isFavorite } = useStudy()
 
   // Only UI state lives here — never selection or submission
   const [commentOpen, setCommentOpen] = useState(false)
@@ -52,7 +50,10 @@ export function QuestionCard({
     setReportText('')
   }, [question.id])
 
-  const isCorrect = selected === question.correct_answer
+  const safeSelected = normalizeAnswer(selected, question.type)
+  const safeCorrect  = normalizeAnswer(question.correct_answer, question.type)
+
+  const isCorrect = safeSelected !== '' && safeSelected === safeCorrect
 
   async function handleReport() {
     if (!reportText.trim() || !user) return
@@ -96,16 +97,6 @@ export function QuestionCard({
           >
             <Flag size={16} />
           </button>
-          <button
-            onClick={() => toggleFavorite(question.id)}
-            className={cn(
-              'rounded-md p-1.5 transition-colors',
-              isFavorite(question.id) ? 'text-red-500' : 'text-muted-foreground hover:text-foreground'
-            )}
-            title={isFavorite(question.id) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
-          >
-            <Heart size={16} fill={isFavorite(question.id) ? 'currentColor' : 'none'} />
-          </button>
         </div>
       </div>
 
@@ -144,8 +135,9 @@ export function QuestionCard({
       {/* Options */}
       <div className={cn('flex flex-col gap-2', question.type === 'true_false' && 'flex-row')}>
         {options.map(opt => {
-          const isSelected = selected === opt.letter
-          const isCorrectOpt = opt.letter === question.correct_answer
+          const optNorm    = normalizeAnswer(opt.letter, question.type)
+          const isSelected    = safeSelected === optNorm
+          const isCorrectOpt  = optNorm === safeCorrect
 
           return (
             <button
@@ -186,7 +178,7 @@ export function QuestionCard({
           <p className="font-medium text-sm">
             {isCorrect
               ? '✓ Resposta correta!'
-              : `✗ Resposta incorreta — Gabarito: ${question.correct_answer}`}
+              : `✗ Resposta incorreta — Gabarito: ${displayAnswer(question.correct_answer, question.type)}`}
           </p>
         </div>
       )}

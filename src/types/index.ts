@@ -74,3 +74,53 @@ export interface DisciplineProgress {
 }
 
 export type StudyMode = 'sequential' | 'random' | 'discipline' | 'favorites' | 'errors'
+
+export interface SimuladoRecord {
+  id: string
+  user_id: string
+  simulado_number: number
+  title: string
+  is_advanced: boolean
+  total_questions: number
+  total_answered: number
+  total_correct: number
+  total_wrong: number
+  accuracy_percentage: number
+  duration_seconds: number | null
+  completed_at: string
+  created_at: string
+}
+
+export interface SimuladoQuestion {
+  id: string
+  simulado_id: string
+  question_id: string
+  selected_answer: string | null
+  correct_answer: string
+  is_correct: boolean
+  discipline_id: string
+  subject_id: string
+}
+
+export interface Flashcard {
+  id: string
+  user_id: string
+  question_id: string
+  source_type: 'study' | 'simulado' | 'review' | 'import'
+  simulado_id: string | null
+  discipline_id: string
+  subject_id: string
+  front_text: string
+  back_answer: string
+  back_trap: string
+  back_antidote: string
+  status: 'new' | 'reviewing' | 'mastered'
+  priority: number
+  times_seen: number
+  times_correct: number
+  times_wrong: number
+  last_reviewed_at: string | null
+  next_review_at: string | null
+  created_at: string
+  updated_at: string
+}

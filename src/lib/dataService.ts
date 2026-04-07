@@ -1,6 +1,6 @@
 import type { User } from '@supabase/supabase-js'
 import { supabase } from './supabase'
-import type { Discipline, Subject, Question, Profile } from '@/types'
+import type { Discipline, Subject, Question, Profile, SimuladoRecord, SimuladoQuestion, Flashcard } from '@/types'
 
 export const ADMIN_EMAIL = 'alexandregoncalvespmrr@gmail.com'
 
@@ -580,3 +580,256 @@ export async function getReports() {
   if (error) throw error
   return data ?? []
 }
+
+// -- QUESTIONS BY IDS ---------------------------------------------------------
+
+export async function getQuestionsByIds(ids: string[]): Promise<Question[]> {
+  if (ids.length === 0) return []
+  const { data, error } = await supabase
+    .from('questions')
+    .select('*')
+    .in('id', ids)
+
+  if (error) throw error
+  return (data ?? []) as Question[]
+}
+
+// -- SIMULADOS ----------------------------------------------------------------
+
+export async function saveSimulado({
+  userId,
+  isAdvanced,
+  answers,
+  durationSeconds,
+}: {
+  userId: string
+  isAdvanced: boolean
+  answers: Array<{
+    questionId: string
+    selected: string | null
+    isCorrect: boolean
+    disciplineId: string
+    subjectId: string
+    correctAnswer: string
+  }>
+  durationSeconds: number | null
+}): Promise<SimuladoRecord> {
+  // We'll insert it first, then trigger a re-numbering to guarantee perfect sequence
+  const completedAt = new Date()
+  
+  const totalAnswered = answers.filter(a => a.selected !== null).length
+  const totalCorrect  = answers.filter(a => a.isCorrect).length
+  const totalWrong    = totalAnswered - totalCorrect
+  const accuracy      = totalAnswered === 0 ? 0 : Math.round((totalCorrect / totalAnswered) * 100)
+
+  const { data: simulado, error: insError } = await supabase
+    .from('simulados')
+    .insert({
+      user_id:             userId,
+      simulado_number:     0, // Will be updated by renumber
+      title:               'Temp', // Will be updated by renumber
+      is_advanced:         isAdvanced,
+      total_questions:     answers.length,
+      total_answered:      totalAnswered,
+      total_correct:       totalCorrect,
+      total_wrong:         totalWrong,
+      accuracy_percentage: accuracy,
+      duration_seconds:    durationSeconds,
+      completed_at:        completedAt.toISOString(),
+    })
+    .select('*')
+    .single()
+
+  if (insError) throw insError
+
+  if (answers.length > 0) {
+    const rows = answers.map(a => ({
+      simulado_id:      simulado.id,
+      question_id:      a.questionId,
+      selected_answer:  a.selected,
+      correct_answer:   a.correctAnswer,
+      is_correct:       a.isCorrect,
+      discipline_id:    a.disciplineId,
+      subject_id:       a.subjectId,
+    }))
+    const { error: qError } = await supabase.from('simulado_questions').insert(rows)
+    if (qError) throw qError
+  }
+
+  // Renumber everything for this user to guarantee sequence
+  await renumberSimulados(userId)
+
+  // Return the fetched renumbered version
+  return (await getSimuladoById(simulado.id)) as SimuladoRecord
+}
+
+export async function deleteSimulado(userId: string, simuladoId: string): Promise<void> {
+  // Delete the simulado (simulado_questions will be cascade deleted if setup, but let's be safe)
+  await supabase.from('simulado_questions').delete().eq('simulado_id', simuladoId)
+  
+  const { error } = await supabase.from('simulados').delete().eq('id', simuladoId).eq('user_id', userId)
+  if (error) throw error
+
+  // Renumber the remaining simulados
+  await renumberSimulados(userId)
+}
+
+// Internal helper to renumber simulados dynamically based on completed_at
+async function renumberSimulados(userId: string) {
+  const { data, error } = await supabase
+    .from('simulados')
+    .select('id, completed_at')
+    .eq('user_id', userId)
+    .order('completed_at', { ascending: true })
+
+  if (error || !data) return
+
+  for (let i = 0; i < data.length; i++) {
+    const sim = data[i]
+    const num = i + 1
+    const dateStr = new Date(sim.completed_at).toLocaleDateString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+    })
+    const title = `${num} - Simulado ALE-RR (${dateStr})`
+    
+    await supabase.from('simulados')
+      .update({ simulado_number: num, title })
+      .eq('id', sim.id)
+  }
+}
+
+export async function getSimulados(userId: string): Promise<SimuladoRecord[]> {
+  const { data, error } = await supabase
+    .from('simulados')
+    .select('*')
+    .eq('user_id', userId)
+    .order('simulado_number', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as SimuladoRecord[]
+}
+
+export async function getSimuladoById(simuladoId: string): Promise<SimuladoRecord | null> {
+  const { data, error } = await supabase
+    .from('simulados')
+    .select('*')
+    .eq('id', simuladoId)
+    .maybeSingle()
+
+  if (error) throw error
+  return (data as SimuladoRecord | null) ?? null
+}
+
+export async function getSimuladoQuestions(simuladoId: string): Promise<SimuladoQuestion[]> {
+  const { data, error } = await supabase
+    .from('simulado_questions')
+    .select('*')
+    .eq('simulado_id', simuladoId)
+
+  if (error) throw error
+  return (data ?? []) as SimuladoQuestion[]
+}
+
+// -- FLASHCARDS ---------------------------------------------------------------
+
+export async function generateFlashcard(params: {
+  question: Question
+  selectedAnswer: string
+  sourceType: 'study' | 'simulado'
+  simuladoId?: string
+}): Promise<boolean> {
+  try {
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData?.session?.access_token
+
+    if (!token) return false
+
+    const response = await fetch('/api/generate-flashcard', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        question_id: params.question.id,
+        source_type: params.sourceType,
+        simulado_id: params.simuladoId,
+        discipline_id: params.question.discipline_id,
+        subject_id: params.question.subject_id,
+        statement: params.question.statement,
+        options: params.question.options,
+        correct_answer: params.question.correct_answer,
+        user_wrong_answer: params.selectedAnswer,
+        comment: params.question.comment,
+        legal_basis: params.question.legal_basis
+      })
+    })
+
+    return response.ok
+  } catch (error) {
+    console.error('[generateFlashcard] Erro:', error)
+    return false
+  }
+}
+
+export async function getFlashcards(userId: string): Promise<Flashcard[]> {
+  const { data, error } = await supabase
+    .from('flashcards')
+    .select('*')
+    .eq('user_id', userId)
+    .order('next_review_at', { ascending: true })
+    .order('priority', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as Flashcard[]
+}
+
+export async function updateFlashcardReview(id: string, isCorrect: boolean): Promise<void> {
+  const { data: flashcard, error: fetchError } = await supabase
+    .from('flashcards')
+    .select('*')
+    .eq('id', id)
+    .single()
+
+  if (fetchError || !flashcard) return
+
+  const timesSeen = (flashcard.times_seen || 0) + 1
+  let timesCorrect = flashcard.times_correct || 0
+  let timesWrong = flashcard.times_wrong || 0
+  let priority = flashcard.priority || 1
+  let status = flashcard.status
+
+  if (isCorrect) {
+    timesCorrect++
+    priority = Math.max(1, priority - 1)
+    if (timesCorrect > 2 && timesCorrect > timesWrong) {
+      status = 'mastered'
+    }
+  } else {
+    timesWrong++
+    priority += 2
+    status = 'reviewing'
+  }
+
+  // Simplified spaced repetition delay
+  const delayHours = isCorrect ? (timesCorrect * 24) : 1
+  const nextReviewAt = new Date()
+  nextReviewAt.setHours(nextReviewAt.getHours() + delayHours)
+
+  const { error } = await supabase
+    .from('flashcards')
+    .update({
+      times_seen: timesSeen,
+      times_correct: timesCorrect,
+      times_wrong: timesWrong,
+      priority,
+      status,
+      last_reviewed_at: new Date().toISOString(),
+      next_review_at: nextReviewAt.toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', id)
+
+  if (error) throw error
+}
+

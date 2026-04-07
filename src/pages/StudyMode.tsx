@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Shuffle, List, RotateCcw } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { QuestionCard } from '@/components/QuestionCard'
-import { getSubjects, getDisciplines, getQuestions } from '@/lib/dataService'
+import { getSubjects, getDisciplines, getQuestions, generateFlashcard } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
 import { shuffle } from '@/lib/utils'
 import type { Question, UserAnswer } from '@/types'
@@ -102,14 +102,26 @@ export function StudyMode() {
   const handleSubmit = useCallback(() => {
     const q = questions[currentIndex]
     if (!selected || !q || submitted) return
+
+    const isCorrect = selected === q.correct_answer
+
     const answer: UserAnswer = {
       questionId: q.id,
       selectedAnswer: selected,
-      isCorrect: selected === q.correct_answer,
+      isCorrect,
       answeredAt: new Date().toISOString(),
     }
+
     recordAnswer(answer)
     setSubmitted(true)
+
+    if (!isCorrect) {
+      generateFlashcard({
+        question: q,
+        selectedAnswer: selected,
+        sourceType: 'study',
+      }).catch(console.error)
+    }
   }, [selected, questions, currentIndex, submitted, recordAnswer])
 
   const handleNext = useCallback(() => {

@@ -5,13 +5,10 @@ import type { UserAnswer, SubjectProgress } from '@/types'
 
 interface StudyContextType {
   answers: UserAnswer[]
-  favorites: string[]
   studyLoading: boolean
   recordAnswer: (answer: UserAnswer) => Promise<void>
   resetByQuestionIds: (ids: string[]) => Promise<void>
   resetAllProgress: () => Promise<void>
-  toggleFavorite: (questionId: string) => Promise<void>
-  isFavorite: (questionId: string) => boolean
   getSubjectProgress: (subjectId: string, questionIds: string[]) => SubjectProgress
   getWrongAnswers: () => UserAnswer[]
   clearAnswer: (questionId: string) => Promise<void>
@@ -22,14 +19,12 @@ const StudyContext = createContext<StudyContextType | null>(null)
 export function StudyProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const [answers, setAnswers] = useState<UserAnswer[]>([])
-  const [favorites, setFavorites] = useState<string[]>([])
   const [studyLoading, setStudyLoading] = useState(false)
 
-  // Load user data from Supabase whenever user changes
+  // ── Carrega dados do banco sempre que o usuário muda ──────────────────────
   useEffect(() => {
     if (!user) {
       setAnswers([])
-      setFavorites([])
       return
     }
 
@@ -37,8 +32,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
 
     Promise.all([
       supabase.from('user_answers').select('*').eq('user_id', user.id),
-      supabase.from('user_favorites').select('question_id').eq('user_id', user.id),
-    ]).then(([answersRes, favsRes]) => {
+    ]).then(([answersRes]) => {
+      // Erros explícitos — sem silenciar falhas de banco
+      if (answersRes.error) {
+        console.error('[StudyContext] Erro ao carregar respostas:', answersRes.error.message)
+      }
+
       setAnswers(
         (answersRes.data ?? []).map(row => ({
           questionId: row.question_id as string,
@@ -47,61 +46,65 @@ export function StudyProvider({ children }: { children: ReactNode }) {
           answeredAt: row.answered_at as string,
         }))
       )
-      setFavorites((favsRes.data ?? []).map(row => row.question_id as string))
+    }).catch(err => {
+      console.error('[StudyContext] Erro inesperado ao carregar:', err)
     }).finally(() => setStudyLoading(false))
   }, [user?.id])
 
+  // ── Persiste uma resposta no banco ────────────────────────────────────────
   async function recordAnswer(answer: UserAnswer) {
     if (!user) return
-    // Optimistic update
+
+    // Atualização otimista (state imediato)
     setAnswers(prev => {
       const idx = prev.findIndex(a => a.questionId === answer.questionId)
-      if (idx >= 0) { const u = [...prev]; u[idx] = answer; return u }
+      if (idx >= 0) {
+        const updated = [...prev]
+        updated[idx] = answer
+        return updated
+      }
       return [...prev, answer]
     })
-    // Persist
-    await supabase.from('user_answers').upsert({
-      user_id: user.id,
-      question_id: answer.questionId,
-      selected_answer: answer.selectedAnswer,
-      is_correct: answer.isCorrect,
-      answered_at: answer.answeredAt,
-    }, { onConflict: 'user_id,question_id' })
-  }
 
-  async function resetByQuestionIds(ids: string[]) {
-    if (!user) return
-    setAnswers(prev => prev.filter(a => !ids.includes(a.questionId)))
-    await supabase.from('user_answers')
-      .delete()
-      .eq('user_id', user.id)
-      .in('question_id', ids)
-  }
+    // Persiste no banco com upsert (CRITICAL — usa constraint declarada no SQL)
+    const { error } = await supabase.from('user_answers').upsert(
+      {
+        user_id: user.id,
+        question_id: answer.questionId,
+        selected_answer: answer.selectedAnswer,
+        is_correct: answer.isCorrect,
+        answered_at: answer.answeredAt,
+      },
+      { onConflict: 'user_id,question_id' }
+    )
 
-  async function resetAllProgress() {
-    if (!user) return
-    setAnswers([])
-    await supabase.from('user_answers').delete().eq('user_id', user.id)
-  }
-
-  async function toggleFavorite(questionId: string) {
-    if (!user) return
-    const isFav = favorites.includes(questionId)
-    if (isFav) {
-      setFavorites(prev => prev.filter(id => id !== questionId))
-      await supabase.from('user_favorites')
-        .delete().eq('user_id', user.id).eq('question_id', questionId)
-    } else {
-      setFavorites(prev => [...prev, questionId])
-      await supabase.from('user_favorites')
-        .insert({ user_id: user.id, question_id: questionId })
+    if (error) {
+      console.error('[StudyContext] Erro ao salvar resposta:', error.message)
     }
   }
 
-  function isFavorite(questionId: string) {
-    return favorites.includes(questionId)
+  // ── Reset por IDs ─────────────────────────────────────────────────────────
+  async function resetByQuestionIds(ids: string[]) {
+    if (!user) return
+    setAnswers(prev => prev.filter(a => !ids.includes(a.questionId)))
+    const { error } = await supabase.from('user_answers')
+      .delete()
+      .eq('user_id', user.id)
+      .in('question_id', ids)
+    if (error) console.error('[StudyContext] Erro ao resetar questões:', error.message)
   }
 
+  // ── Reset total ───────────────────────────────────────────────────────────
+  async function resetAllProgress() {
+    if (!user) return
+    setAnswers([])
+    const { error } = await supabase.from('user_answers').delete().eq('user_id', user.id)
+    if (error) console.error('[StudyContext] Erro ao resetar progresso:', error.message)
+  }
+
+
+
+  // ── Progresso por assunto ────────────────────────────────────────────────
   function getSubjectProgress(subjectId: string, questionIds: string[]): SubjectProgress {
     const subjectAnswers = answers.filter(a => questionIds.includes(a.questionId))
     return {
@@ -112,22 +115,24 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // ── Erros gerais ─────────────────────────────────────────────────────────
   function getWrongAnswers(): UserAnswer[] {
     return answers.filter(a => !a.isCorrect)
   }
 
+  // ── Limpar uma questão específica ────────────────────────────────────────
   async function clearAnswer(questionId: string) {
     if (!user) return
     setAnswers(prev => prev.filter(a => a.questionId !== questionId))
-    await supabase.from('user_answers')
+    const { error } = await supabase.from('user_answers')
       .delete().eq('user_id', user.id).eq('question_id', questionId)
+    if (error) console.error('[StudyContext] Erro ao limpar resposta:', error.message)
   }
 
   return (
     <StudyContext.Provider value={{
-      answers, favorites, studyLoading,
+      answers, studyLoading,
       recordAnswer, resetByQuestionIds, resetAllProgress,
-      toggleFavorite, isFavorite,
       getSubjectProgress, getWrongAnswers, clearAnswer,
     }}>
       {children}

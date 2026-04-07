@@ -4,9 +4,10 @@ import { Clock, CheckCircle2, ChevronRight, Shuffle, BrainCircuit, ChevronDown, 
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { ProgressBar } from '@/components/ProgressBar'
-import { getDisciplines, getSubjects, getQuestions } from '@/lib/dataService'
+import { getDisciplines, getSubjects, getQuestions, saveSimulado, generateFlashcard } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
-import { shuffle, cn } from '@/lib/utils'
+import { useAuth } from '@/contexts/AuthContext'
+import { shuffle, cn, normalizeAnswer } from '@/lib/utils'
 import type { Discipline, Subject, Question } from '@/types'
 
 type SimTab = 'basico' | 'avancado'
@@ -74,6 +75,7 @@ function buildInterleavedQuestions(
 export function Simulado() {
   const navigate = useNavigate()
   const { recordAnswer } = useStudy()
+  const { user } = useAuth()
 
   const [simTab, setSimTab] = useState<SimTab>('basico')
   const [phase, setPhase] = useState<Phase>('setup')
@@ -105,7 +107,10 @@ export function Simulado() {
   const simAnswersRef = useRef<SimAnswer[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const finishedRef = useRef(false)
+  const startedAtRef = useRef<number>(0)
+  const questionsRef = useRef<Question[]>([])
   simAnswersRef.current = simAnswers
+  questionsRef.current = questions
 
   useEffect(() => {
     async function load() {
@@ -183,6 +188,7 @@ export function Simulado() {
 
   function launchRun(qs: Question[], mins: number, isAdv: boolean) {
     finishedRef.current = false
+    startedAtRef.current = Date.now()
     setQuestions(qs)
     setSimAnswers([])
     setCurrentIndex(0)
@@ -195,10 +201,12 @@ export function Simulado() {
 
   function handleNext() {
     const q = questions[currentIndex]
+    const normSelected = normalizeAnswer(selected, q.type)
+    const normCorrect  = normalizeAnswer(q.correct_answer, q.type)
     const newAnswer: SimAnswer = {
       questionId: q.id,
       selected,
-      isCorrect: selected === q.correct_answer,
+      isCorrect: normSelected !== '' && normSelected === normCorrect,
       disciplineId: q.discipline_id,
       subjectId: q.subject_id,
     }
@@ -216,16 +224,58 @@ export function Simulado() {
 
   function doFinish(answers: SimAnswer[]) {
     if (timerRef.current) clearInterval(timerRef.current)
+
+    const now = new Date().toISOString()
     for (const a of answers) {
       if (a.selected !== null) {
         recordAnswer({
           questionId: a.questionId,
           selectedAnswer: a.selected,
           isCorrect: a.isCorrect,
-          answeredAt: new Date().toISOString(),
+          answeredAt: now,
         })
       }
     }
+
+    // Persist simulado record (fire-and-forget — don't block result screen)
+    if (user) {
+      const durationSeconds = startedAtRef.current
+        ? Math.round((Date.now() - startedAtRef.current) / 1000)
+        : null
+
+      const answersWithCorrect = answers.map(a => ({
+        questionId:    a.questionId,
+        selected:      a.selected,
+        isCorrect:     a.isCorrect,
+        disciplineId:  a.disciplineId,
+        subjectId:     a.subjectId,
+        correctAnswer: questionsRef.current.find(q => q.id === a.questionId)?.correct_answer ?? '',
+      }))
+
+      saveSimulado({
+        userId: user.id,
+        isAdvanced: isAdvancedRun,
+        answers: answersWithCorrect,
+        durationSeconds,
+      })
+      .then(saved => {
+        // Generate flashcards for wrong answers in the background
+        const wrongAnswers = answers.filter(a => !a.isCorrect && a.selected !== null)
+        for (const wa of wrongAnswers) {
+          const q = questionsRef.current.find(q => q.id === wa.questionId)
+          if (q) {
+            generateFlashcard({
+              question: q,
+              selectedAnswer: wa.selected as string,
+              sourceType: 'simulado',
+              simuladoId: saved.id
+            }).catch(console.error)
+          }
+        }
+      })
+      .catch(err => console.error('[simulado] erro ao salvar:', err))
+    }
+
     setPhase('result')
   }
 

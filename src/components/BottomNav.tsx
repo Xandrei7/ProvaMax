@@ -1,12 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { House, BookOpen, Timer, Heart, ChartColumn } from 'lucide-react'
+import { House, BookOpen, Timer, Brain, ChartColumn } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const tabs = [
   { to: '/', icon: House, label: 'Início', end: true },
   { to: '/disciplines', icon: BookOpen, label: 'Matérias' },
   { to: '/simulado', icon: Timer, label: 'Simulado' },
-  { to: '/favorites', icon: Heart, label: 'Favoritos' },
+  { to: '/flashcards', icon: Brain, label: 'Flashcards' },
   { to: '/stats', icon: ChartColumn, label: 'Stats' },
 ]
 
