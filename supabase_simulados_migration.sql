@@ -4,9 +4,8 @@
 --
 -- INCLUI:
 --   1. user_answers      (respostas gerais — FIX da persistência)
---   2. user_favorites    (favoritos)
---   3. simulados         (histórico de simulados)
---   4. simulado_questions (questões de cada simulado)
+--   2. simulados         (histórico de simulados)
+--   3. simulado_questions (questões de cada simulado)
 --
 -- Seguro rodar múltiplas vezes: usa CREATE TABLE IF NOT EXISTS e DROP POLICY IF EXISTS
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -53,37 +52,7 @@ CREATE POLICY "user_answers_delete_own"
   USING (auth.uid() = user_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 2. user_favorites
--- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS public.user_favorites (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  question_id uuid NOT NULL REFERENCES public.questions(id) ON DELETE CASCADE,
-
-  CONSTRAINT user_favorites_unique UNIQUE (user_id, question_id)
-);
-
-CREATE INDEX IF NOT EXISTS user_favorites_user_id_idx ON public.user_favorites(user_id);
-
-ALTER TABLE public.user_favorites ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "user_favorites_select_own" ON public.user_favorites;
-CREATE POLICY "user_favorites_select_own"
-  ON public.user_favorites FOR SELECT
-  USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "user_favorites_insert_own" ON public.user_favorites;
-CREATE POLICY "user_favorites_insert_own"
-  ON public.user_favorites FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "user_favorites_delete_own" ON public.user_favorites;
-CREATE POLICY "user_favorites_delete_own"
-  ON public.user_favorites FOR DELETE
-  USING (auth.uid() = user_id);
-
--- ─────────────────────────────────────────────────────────────────────────────
--- 3. simulados
+-- 2. simulados
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.simulados (
   id                  uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -129,7 +98,7 @@ CREATE POLICY "simulados_delete_own"
   USING (auth.uid() = user_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 4. simulado_questions
+-- 3. simulado_questions
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.simulado_questions (
   id                  uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -180,11 +149,9 @@ CREATE POLICY "simulado_questions_delete_own"
   );
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Verificação final — deve mostrar as 4 tabelas com 0 linhas
+-- Verificação final — deve mostrar as 3 tabelas com 0 linhas
 -- ─────────────────────────────────────────────────────────────────────────────
 SELECT 'user_answers'       AS tabela, COUNT(*) AS total FROM public.user_answers
-UNION ALL
-SELECT 'user_favorites',      COUNT(*) FROM public.user_favorites
 UNION ALL
 SELECT 'simulados',           COUNT(*) FROM public.simulados
 UNION ALL

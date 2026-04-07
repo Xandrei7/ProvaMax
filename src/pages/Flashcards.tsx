@@ -140,6 +140,17 @@ export function Flashcards() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [showAnswer, setShowAnswer] = useState(false)
   const [activeReviewMode, setActiveReviewMode] = useState<ReviewMode>('smart')
+  const [reviewError, setReviewError] = useState<string | null>(null)
+
+  async function reloadFlashcards() {
+    if (!user) return
+    try {
+      const loaded = await getFlashcards(user.id)
+      setFlashcards(loaded)
+    } catch (error) {
+      console.error('[flashcards] reload failed:', error)
+    }
+  }
 
   useEffect(() => {
     async function loadData() {
@@ -266,21 +277,27 @@ export function Flashcards() {
     if (!card) return
 
     setUpdating(true)
+    setReviewError(null)
     try {
       const updated = await reviewFlashcard(card.id, action, user.id)
       if (updated) {
         setFlashcards(prev => prev.map(item => (item.id === updated.id ? updated : item)))
       }
-    } catch (error) {
-      console.error('[flashcards] review update failed:', error)
-    } finally {
-      setUpdating(false)
       setShowAnswer(false)
-      if (currentIndex < dueCards.length - 1) {
+      if (action === 'wrong') {
+        // Requeue card at end of session (Anki-style)
+        setDueCards(prev => [...prev, card])
+        setCurrentIndex(prev => prev + 1)
+      } else if (currentIndex < dueCards.length - 1) {
         setCurrentIndex(prev => prev + 1)
       } else {
         setPhase('finished')
       }
+    } catch (error) {
+      console.error('[flashcards] review update failed:', error)
+      setReviewError('Falha ao salvar resposta. Tente novamente.')
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -307,7 +324,7 @@ export function Flashcards() {
             Você finalizou a sessão. O sistema já agendou os próximos cards no tempo certo.
           </p>
           <button
-            onClick={() => setPhase('overview')}
+            onClick={() => { void reloadFlashcards(); setPhase('overview') }}
             className="rounded-xl border border-border bg-card px-6 py-3 font-semibold hover:bg-muted/50"
           >
             Voltar para Flashcards
@@ -329,7 +346,7 @@ export function Flashcards() {
           <Header title="Flashcards" showBack={false} />
           <main className="mx-auto w-full max-w-lg flex-1 px-4 pb-24 flex items-center justify-center">
             <button
-              onClick={() => setPhase('overview')}
+              onClick={() => { void reloadFlashcards(); setPhase('overview') }}
               className="rounded-xl border border-border bg-card px-6 py-3 font-semibold"
             >
               Voltar ao painel
@@ -349,7 +366,7 @@ export function Flashcards() {
         {/* Header da revisão */}
         <div className="sticky top-0 z-20 border-b border-border bg-background px-4 py-3 flex items-center gap-3">
           <button
-            onClick={() => setPhase('overview')}
+            onClick={() => { void reloadFlashcards(); setPhase('overview') }}
             className="text-sm text-muted-foreground hover:text-foreground shrink-0"
           >
             Sair
@@ -455,6 +472,11 @@ export function Flashcards() {
         {showAnswer && (
           <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background p-3 z-30">
             <div className="mx-auto max-w-lg flex flex-col gap-2">
+              {reviewError && (
+                <p className="text-center text-xs text-red-500 font-semibold py-1 rounded-lg bg-red-500/10 border border-red-500/20">
+                  {reviewError}
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => handleReviewAction('wrong')}
@@ -673,7 +695,7 @@ export function Flashcards() {
           <div className="rounded-xl border border-border bg-card p-3 grid grid-cols-2 gap-2">
             <select
               value={disciplineFilter}
-              onChange={e => setDisciplineFilter(e.target.value)}
+              onChange={e => { setDisciplineFilter(e.target.value); setSubjectFilter('all') }}
               className="rounded-lg border border-border bg-background px-2 py-2 text-xs"
             >
               <option value="all">Disciplina: todas</option>

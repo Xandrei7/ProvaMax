@@ -1,74 +1,45 @@
-# React + TypeScript + Vite
+# ProvaMax
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Aplicacao React + Vite com Supabase e backend serverless para gerar Flashcards de recuperacao ativa.
 
-Currently, two official plugins are available:
+## Rotas principais
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- `/flashcards`: pagina oficial de Flashcards
+- `/favorites`: compatibilidade legada (redireciona para `/flashcards`)
 
-## React Compiler
+## Backend de Flashcards
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Endpoint principal:
 
-## Expanding the ESLint configuration
+- `POST /api/generate-flashcard`
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+Fluxo:
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+1. Valida token e `user_id`
+2. Busca flashcard existente por `(user_id, question_id)`
+3. Se existir, atualiza prioridade/status/contadores sem chamar IA
+4. Se nao existir, gera com IA (ou fallback), valida e salva no Supabase
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Variaveis de ambiente
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Consulte `.env.example`.
+
+Principais variaveis:
+
+- Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+- Backend: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `OPENAI_API_KEY`
+- Opcional: `FLASHCARD_AI_DAILY_LIMIT`, `OPENAI_FLASHCARD_MODEL`
+
+## SQL
+
+Execute no Supabase SQL Editor:
+
+- `supabase_flashcards_migration.sql`
+
+Esse script cria/garante tabela de flashcards, unique `(user_id, question_id)`, indices e RLS com isolamento por usuario.
+
+## Build
+
+```bash
+npm run build
 ```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-"# provamax" 

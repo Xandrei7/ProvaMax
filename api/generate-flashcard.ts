@@ -1,20 +1,165 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import OpenAI from 'openai'
+import { generateFlashcardWithAi } from './_lib/flashcardAi.js'
 
-// Constants
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
+type SourceType = 'study' | 'simulado' | 'review' | 'import'
+
+interface GenerateFlashcardBody {
+  user_id?: string
+  question_id?: string
+  bank?: string
+  discipline?: string
+  subject?: string
+  question_type?: string
+  statement?: string
+  alternatives?: unknown
+  options?: unknown
+  correct_answer?: string
+  user_wrong_answer?: string
+  explanation?: string
+  comment?: string
+  legal_basis?: string | null
+  source_type?: SourceType
+  simulado_id?: string
+  discipline_id?: string
+  subject_id?: string
+}
+
+interface QuestionInput {
+  id: string
+  statement: string
+  type: string
+  options: unknown
+  correct_answer: string
+  comment: string | null
+  legal_basis: string | null
+  discipline_id: string
+  subject_id: string
+}
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY
+const FLASHCARD_AI_DAILY_LIMIT = Number(process.env.FLASHCARD_AI_DAILY_LIMIT || '0')
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_REGEX.test(value)
+}
+
+function safeString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function fallbackFlashcard(params: {
+  discipline: string
+  subject: string
+  correctAnswer: string
+  userWrongAnswer: string
+  explanation: string
+  legalBasis: string
+}) {
+  const focus = params.subject || params.discipline || 'regra central'
+  const explanation = params.explanation.slice(0, 220)
+  const legal = params.legalBasis.slice(0, 160)
+
+  return {
+    front_text: `Em prova FCC, qual e a regra principal sobre ${focus}?`,
+    back_answer: explanation || `Resposta correta: ${params.correctAnswer}. Aplique o criterio objetivo da regra.`,
+    back_trap: params.userWrongAnswer
+      ? `A pegadinha e marcar ${params.userWrongAnswer} por parecer plausivel sem conferir o criterio tecnico.`
+      : 'A pegadinha e confundir regra geral com excecao, prazo ou sujeito competente.',
+    back_antidote: legal
+      ? `SE aparecer questao sobre ${focus}, ENTAO valide primeiro: ${legal}.`
+      : `SE aparecer questao sobre ${focus}, ENTAO confirme criterio, excecoes e termos absolutos antes de marcar.`,
+  }
+}
+
+async function reachedDailyAiLimit(userScopedSupabase: unknown, userId: string) {
+  const sb = userScopedSupabase as any
+
+  if (!FLASHCARD_AI_DAILY_LIMIT || Number.isNaN(FLASHCARD_AI_DAILY_LIMIT) || FLASHCARD_AI_DAILY_LIMIT <= 0) {
+    return false
+  }
+
+  const today = new Date()
+  today.setUTCHours(0, 0, 0, 0)
+
+  const { count, error } = await sb
+    .from('flashcards')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', today.toISOString())
+
+  if (error) {
+    console.warn('[generate-flashcard] daily limit check failed:', error.message)
+    return false
+  }
+
+  return (count || 0) >= FLASHCARD_AI_DAILY_LIMIT
+}
+
+async function resolveNameById(userScopedSupabase: unknown, table: 'disciplines' | 'subjects', id?: string) {
+  const sb = userScopedSupabase as any
+
+  if (!id || !isUuid(id)) return ''
+  const { data } = await sb.from(table).select('name').eq('id', id).maybeSingle()
+  return safeString((data as { name?: unknown } | null)?.name)
+}
+
+async function resolveQuestionPayload(userScopedSupabase: unknown, body: GenerateFlashcardBody, questionId: string) {
+  const sb = userScopedSupabase as any
+
+  const hasBodyQuestionData =
+    !!safeString(body.statement) &&
+    !!safeString(body.correct_answer) &&
+    !!safeString(body.discipline_id) &&
+    !!safeString(body.subject_id)
+
+  let dbQuestion: QuestionInput | null = null
+
+  if (!hasBodyQuestionData) {
+    const { data, error } = await sb
+      .from('questions')
+      .select('id, statement, type, options, correct_answer, comment, legal_basis, discipline_id, subject_id')
+      .eq('id', questionId)
+      .maybeSingle()
+
+    if (error) {
+      throw new Error(`Failed to load question: ${error.message}`)
+    }
+
+    if (!data) {
+      throw new Error('Question not found')
+    }
+
+    dbQuestion = data as QuestionInput
+  }
+
+  const disciplineId = safeString(body.discipline_id) || dbQuestion?.discipline_id || ''
+  const subjectId = safeString(body.subject_id) || dbQuestion?.subject_id || ''
+
+  return {
+    statement: safeString(body.statement) || dbQuestion?.statement || '',
+    questionType: safeString(body.question_type) || dbQuestion?.type || 'multiple_choice',
+    alternatives: body.alternatives ?? body.options ?? dbQuestion?.options ?? [],
+    correctAnswer: safeString(body.correct_answer) || dbQuestion?.correct_answer || '',
+    explanation: safeString(body.explanation || body.comment) || dbQuestion?.comment || '',
+    legalBasis: safeString(body.legal_basis) || dbQuestion?.legal_basis || '',
+    disciplineId,
+    subjectId,
+  }
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', 'true')
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT')
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization',
   )
 
   if (req.method === 'OPTIONS') {
@@ -27,145 +172,171 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const authHeader = req.headers.authorization
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Missing authorization header' })
     }
 
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    const token = authHeader.replace('Bearer ', '').trim()
+    if (!token) {
+      return res.status(401).json({ error: 'Invalid authorization header' })
+    }
+
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
       throw new Error('Missing Supabase configuration')
     }
 
-    // Initialize Supabase admin client to bypass RLS or insert securely
-    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false }
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
     })
 
-    // Verify user token
-    const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    
+    const userScopedSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    })
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token)
+
     if (authError || !user) {
       return res.status(401).json({ error: 'Unauthorized', details: authError?.message })
     }
 
-    const { question_id, source_type, simulado_id, discipline_id, subject_id, statement, options, correct_answer, user_wrong_answer, comment, legal_basis } = req.body
+    const parsedBody = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {})
+    const body = parsedBody as GenerateFlashcardBody
 
-    if (!question_id) {
-      return res.status(400).json({ error: 'question_id is required' })
+    const userId = safeString(body.user_id)
+    const questionId = safeString(body.question_id)
+    const simuladoId = safeString(body.simulado_id)
+    const userWrongAnswer = safeString(body.user_wrong_answer)
+
+    const sourceType: SourceType = ['study', 'simulado', 'review', 'import'].includes(String(body.source_type))
+      ? (body.source_type as SourceType)
+      : 'study'
+
+    if (!isUuid(questionId)) {
+      return res.status(400).json({ error: 'question_id is required and must be UUID' })
     }
 
-    // 1. Verify if flashcard already exists
-    const { data: existingFlashcard, error: fetchError } = await supabaseAdmin
+    if (!isUuid(userId) || userId !== user.id) {
+      return res.status(403).json({ error: 'user_id must match authenticated user' })
+    }
+
+    if (!userWrongAnswer) {
+      return res.status(400).json({ error: 'user_wrong_answer is required' })
+    }
+
+    if (sourceType === 'simulado' && !isUuid(simuladoId)) {
+      return res.status(400).json({ error: 'simulado_id is required and must be UUID for simulado source' })
+    }
+
+    if (sourceType === 'simulado' && simuladoId) {
+      const { data: ownSimulado, error: simuladoError } = await userScopedSupabase
+        .from('simulados')
+        .select('id')
+        .eq('id', simuladoId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (simuladoError) {
+        return res.status(500).json({ error: 'Failed to validate simulado ownership', details: simuladoError.message })
+      }
+
+      if (!ownSimulado) {
+        return res.status(403).json({ error: 'Simulado does not belong to current user' })
+      }
+    }
+
+    const question = await resolveQuestionPayload(userScopedSupabase, body, questionId)
+
+    if (!question.statement || !question.correctAnswer || !question.disciplineId || !question.subjectId) {
+      return res.status(400).json({
+        error: 'Missing required question data',
+        required: ['statement', 'correct_answer', 'discipline_id', 'subject_id'],
+      })
+    }
+
+    const { data: existingFlashcard, error: existingError } = await userScopedSupabase
       .from('flashcards')
       .select('*')
       .eq('user_id', user.id)
-      .eq('question_id', question_id)
+      .eq('question_id', questionId)
       .maybeSingle()
 
-    if (fetchError && fetchError.code !== 'PGRST116') {
-      console.error('Error fetching existing flashcard:', fetchError)
-      return res.status(500).json({ error: 'Database error' })
+    if (existingError && existingError.code !== 'PGRST116') {
+      return res.status(500).json({ error: 'Failed to fetch existing flashcard', details: existingError.message })
     }
 
     if (existingFlashcard) {
-      // 2. If it exists, update priority/status/times_wrong rather than duplicate (per requirements)
-      const { data: updated, error: updateError } = await supabaseAdmin
+      const { data: updated, error: updateError } = await userScopedSupabase
         .from('flashcards')
         .update({
-          priority: existingFlashcard.priority + 1,
-          times_wrong: existingFlashcard.times_wrong + 1,
+          priority: (existingFlashcard.priority ?? 0) + 1,
+          times_wrong: (existingFlashcard.times_wrong ?? 0) + 1,
           status: 'reviewing',
-          updated_at: new Date().toISOString()
+          source_type: sourceType,
+          simulado_id: sourceType === 'simulado' ? simuladoId : existingFlashcard.simulado_id,
+          next_review_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         })
         .eq('id', existingFlashcard.id)
+        .eq('user_id', user.id)
         .select('*')
         .single()
 
       if (updateError) {
-        return res.status(500).json({ error: 'Failed to update existing flashcard', details: updateError.message })
+        return res.status(500).json({ error: 'Failed to update flashcard', details: updateError.message })
       }
 
-      return res.status(200).json({ flashcard: updated, isNew: false })
+      return res.status(200).json({ flashcard: updated, isNew: false, usedAI: false, reusedExisting: true })
     }
 
-    // 3. Prepare AI Prompt
-    if (!OPENAI_API_KEY) {
-      throw new Error('Missing OpenAI configuration')
-    }
+    const disciplineName = safeString(body.discipline) || await resolveNameById(userScopedSupabase, 'disciplines', question.disciplineId)
+    const subjectName = safeString(body.subject) || await resolveNameById(userScopedSupabase, 'subjects', question.subjectId)
 
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY })
+    let flashcardData = fallbackFlashcard({
+      discipline: disciplineName,
+      subject: subjectName,
+      correctAnswer: question.correctAnswer,
+      userWrongAnswer,
+      explanation: question.explanation,
+      legalBasis: question.legalBasis,
+    })
+    let usedAI = false
 
-    const prompt = `Você é um gerador de flashcards de recuperação ativa para concurso, com foco total em padrão de banca e memorização útil.
-Sua tarefa é transformar UMA questão errada do usuário em UM flashcard altamente eficiente.
+    const limitReached = await reachedDailyAiLimit(userScopedSupabase, user.id)
 
-OBJETIVO:
-Gerar 1 flashcard por questão errada, com foco em recuperação ativa, regra cobrada, pegadinha da banca e antídoto mental prático.
-
-ENTRADA:
-- Banca/Padrão: FCC
-- Enunciado: ${statement}
-- Alternativas: ${JSON.stringify(options ?? [])}
-- Gabarito (Resposta Correta): ${correct_answer}
-- Marcada pelo Usuário: ${user_wrong_answer}
-- Comentário/Explicação: ${comment}
-- Fundamento Legal: ${legal_basis || 'Nenhum'}
-
-REGRAS OBRIGATÓRIAS:
-1. Gere exatamente 1 flashcard.
-2. Frente (front_text) = pergunta sobre a regra cobrada. NÃO copie o enunciado original.
-3. Verso = resposta curta (back_answer) + pegadinha abordada (back_trap) + antídoto SE->ENTÃO (back_antidote).
-4. Linguagem objetiva, direta e curta.
-5. Foco 100% no padrão da questão.
-
-Responda APENAS em JSON válido conforme o formato abaixo:
-{
-  "front_text": "...",
-  "back_answer": "...",
-  "back_trap": "...",
-  "back_antidote": "..."
-}`
-
-    let flashcardData
-
-    try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'system', content: prompt }],
-        response_format: { type: 'json_object' },
-        temperature: 0.3
+    if (OPENAI_API_KEY && !limitReached) {
+      const openai = new OpenAI({ apiKey: OPENAI_API_KEY })
+      flashcardData = await generateFlashcardWithAi(openai, {
+        bank: safeString(body.bank) || 'FCC',
+        discipline: disciplineName,
+        subject: subjectName,
+        questionType: question.questionType,
+        statement: question.statement,
+        alternatives: question.alternatives,
+        correctAnswer: question.correctAnswer,
+        userWrongAnswer,
+        explanation: question.explanation,
+        legalBasis: question.legalBasis,
       })
-
-      const content = response.choices[0]?.message?.content
-      if (!content) throw new Error('Empty AI response')
-
-      flashcardData = JSON.parse(content)
-
-      // Validate required fields
-      if (!flashcardData.front_text || !flashcardData.back_answer || !flashcardData.back_trap || !flashcardData.back_antidote) {
-         throw new Error('Invalid JSON structure from AI')
-      }
-    } catch (aiError) {
-      console.error('AI Error:', aiError)
-      
-      // Fallback
-      flashcardData = {
-        front_text: `Revisar Lei/Regra sobre o tema desta questão.`,
-        back_answer: `Gabarito da banca: ${correct_answer}. Consulte o comentário da questão.`,
-        back_trap: `Atenção à forma como a banca abordou as alternativas erradas.`,
-        back_antidote: `SE a banca cobrar este assunto, ENTÃO lembre das exceções ou prazos e não confunda com conceitos similares.`
-      }
+      usedAI = true
     }
 
-    // 4. Save to Database
-    const { data: newFlashcard, error: insertError } = await supabaseAdmin
+    const { data: created, error: insertError } = await userScopedSupabase
       .from('flashcards')
       .insert({
         user_id: user.id,
-        question_id,
-        source_type: source_type || 'study',
-        simulado_id: simulado_id || null,
-        discipline_id: discipline_id || 'unknown',
-        subject_id: subject_id || 'unknown',
+        question_id: questionId,
+        source_type: sourceType,
+        simulado_id: sourceType === 'simulado' ? simuladoId : null,
+        discipline_id: question.disciplineId,
+        subject_id: question.subjectId,
         front_text: flashcardData.front_text,
         back_answer: flashcardData.back_answer,
         back_trap: flashcardData.back_trap,
@@ -174,21 +345,58 @@ Responda APENAS em JSON válido conforme o formato abaixo:
         priority: 1,
         times_seen: 0,
         times_correct: 0,
-        times_wrong: 1, // User just got it wrong
+        times_wrong: 1,
         last_reviewed_at: null,
-        next_review_at: new Date().toISOString()
+        next_review_at: new Date().toISOString(),
       })
       .select('*')
       .single()
 
     if (insertError) {
-      return res.status(500).json({ error: 'Failed to save flashcard', details: insertError.message })
+      if (insertError.code === '23505') {
+        const { data: racedCard, error: raceFetchError } = await userScopedSupabase
+          .from('flashcards')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('question_id', questionId)
+          .maybeSingle()
+
+        if (raceFetchError || !racedCard) {
+          return res.status(409).json({ error: 'Flashcard already exists and could not be loaded' })
+        }
+
+        const { data: raceUpdated, error: raceUpdateError } = await userScopedSupabase
+          .from('flashcards')
+          .update({
+            priority: (racedCard.priority ?? 0) + 1,
+            times_wrong: (racedCard.times_wrong ?? 0) + 1,
+            status: 'reviewing',
+            source_type: sourceType,
+            simulado_id: sourceType === 'simulado' ? simuladoId : racedCard.simulado_id,
+            next_review_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', racedCard.id)
+          .eq('user_id', user.id)
+          .select('*')
+          .single()
+
+        if (raceUpdateError) {
+          return res.status(500).json({ error: 'Failed to update raced flashcard', details: raceUpdateError.message })
+        }
+
+        return res.status(200).json({ flashcard: raceUpdated, isNew: false, usedAI: false, reusedExisting: true })
+      }
+
+      return res.status(500).json({ error: 'Failed to create flashcard', details: insertError.message })
     }
 
-    return res.status(200).json({ flashcard: newFlashcard, isNew: true })
-
-  } catch (error: any) {
+    return res.status(200).json({ flashcard: created, isNew: true, usedAI, reusedExisting: false })
+  } catch (error: unknown) {
     console.error('API Error:', error)
-    return res.status(500).json({ error: 'Internal server error', details: error?.message })
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error',
+    })
   }
 }

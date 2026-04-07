@@ -19,8 +19,8 @@ O `StudyContext` carrega do banco assim:
 ```ts
 Promise.all([
   supabase.from('user_answers').select('*').eq('user_id', user.id),
-  supabase.from('user_favorites').select('question_id').eq('user_id', user.id),
-]).then(([answersRes, favsRes]) => {
+  supabase.from('flashcards').select('id').eq('user_id', user.id),
+]).then(([answersRes, flashcardsRes]) => {
   setAnswers((answersRes.data ?? []).map(...))
 ```
 
