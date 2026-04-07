@@ -133,7 +133,6 @@ export function Flashcards() {
   const [statusFilter, setStatusFilter] = useState<'all' | Flashcard['status']>('all')
   const [sourceFilter, setSourceFilter] = useState<'all' | Flashcard['source_type']>('all')
 
-  const [reviewMode, setReviewMode] = useState<ReviewMode>('smart')
   const [displayMode, setDisplayMode] = useState<DisplayMode>('deep')
   const [reviewDiscipline, setReviewDiscipline] = useState('all')
 
