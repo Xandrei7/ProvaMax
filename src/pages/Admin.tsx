@@ -197,6 +197,46 @@ export function Admin() {
     })
   }
 
+  function copySelectedToClipboard() {
+    const selected = filteredQuestions.filter(q => selectedQIds.has(q.id))
+    if (selected.length === 0) return
+
+    const gabarito = (q: Question) => {
+      if (q.type === 'true_false') return q.correct_answer === 'C' ? 'Certo' : 'Errado'
+      return q.correct_answer
+    }
+
+    const text = selected.map((q, i) =>
+      `${i + 1}.\nEnunciado: ${q.statement}\nGabarito: ${gabarito(q)}\nComentário: ${q.comment ?? ''}`
+    ).join('\n\n')
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => toast.success(`${selected.length} questão(ões) copiadas para a área de transferência.`),
+        () => fallbackCopy(text)
+      )
+    } else {
+      fallbackCopy(text)
+    }
+  }
+
+  function fallbackCopy(text: string) {
+    const el = document.createElement('textarea')
+    el.value = text
+    el.style.position = 'fixed'
+    el.style.opacity = '0'
+    document.body.appendChild(el)
+    el.focus()
+    el.select()
+    try {
+      document.execCommand('copy')
+      toast.success('Questões copiadas para a área de transferência.')
+    } catch {
+      toast.error('Não foi possível copiar. Tente novamente.')
+    }
+    document.body.removeChild(el)
+  }
+
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'disciplines', label: 'Matérias', icon: <BookOpen size={16}/> },
     { id: 'subjects', label: 'Assuntos', icon: <FileText size={16}/> },
@@ -440,19 +480,27 @@ export function Admin() {
 
             {/* Selection header */}
             {filteredQuestions.length > 0 && (
-              <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground flex-wrap">
                 <input
                   type="checkbox"
                   checked={allVisibleSelected}
                   onChange={toggleSelectAll}
                   className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
                 />
-                <span>
+                <span className="flex-1">
                   {selectedQIds.size > 0 && (
                     <span className="text-foreground font-medium">{selectedQIds.size} selecionada{selectedQIds.size > 1 ? 's' : ''} · </span>
                   )}
                   {filteredQuestions.length} de {questions.length} questões
                 </span>
+                {selectedQIds.size > 0 && (
+                  <button
+                    onClick={copySelectedToClipboard}
+                    className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    Copiar selecionadas
+                  </button>
+                )}
               </div>
             )}
             {filteredQuestions.length === 0 && !qForm && (
