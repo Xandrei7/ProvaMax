@@ -14,7 +14,7 @@ export function StudyMode() {
   const { subjectId, disciplineId } = useParams<{ subjectId?: string; disciplineId?: string }>()
   const mode: Mode = disciplineId ? 'discipline' : 'subject'
   const navigate = useNavigate()
-  const { answers, recordAnswer } = useStudy()
+  const { answers, studyLoading, recordAnswer, resetByQuestionIds } = useStudy()
 
   const [title, setTitle] = useState('')
   const [allQuestions, setAllQuestions] = useState<Question[]>([])
@@ -84,8 +84,20 @@ export function StudyMode() {
     setStudyStarted(true)
   }
 
-  function resetAndStart(selectedMode: 'sequential' | 'random') {
-    startStudy(selectedMode, true)
+  async function resetAndStart(selectedMode: 'sequential' | 'random') {
+    const ids = allQuestions.map(q => q.id)
+    await resetByQuestionIds(ids)   // limpa DB + estado do contexto
+
+    // Monta a lista de questões na ordem correta
+    let qs = [...allQuestions]
+    if (selectedMode === 'random') qs = shuffle(qs)
+    setQuestions(qs)
+
+    // Estado local limpo — não reutiliza initStateForIndex que leria answers antigos
+    setCurrentIndex(0)
+    setSelected(null)
+    setSubmitted(false)
+    setStudyStarted(true)
   }
 
   // Navigate to a specific question index, resetting state synchronously
@@ -146,7 +158,7 @@ export function StudyMode() {
 
   const currentQuestion = questions[currentIndex]
 
-  if (loading) {
+  if (loading || studyLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />

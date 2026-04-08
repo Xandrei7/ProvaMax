@@ -8,7 +8,7 @@ import type { Question } from '@/types'
 export function StudyComplete() {
   const { subjectId } = useParams<{ subjectId: string }>()
   const navigate = useNavigate()
-  const { answers } = useStudy()
+  const { answers, resetByQuestionIds } = useStudy()
   const [subjectName, setSubjectName] = useState('')
   const [disciplineName, setDisciplineName] = useState('')
   const [questions, setQuestions] = useState<Question[]>([])
@@ -67,7 +67,11 @@ export function StudyComplete() {
 
         <div className="flex flex-col gap-2 w-full">
           <button
-            onClick={() => navigate(`/study/${subjectId}`)}
+            onClick={async () => {
+              const ids = questions.map(q => q.id)
+              await resetByQuestionIds(ids)
+              navigate(`/study/${subjectId}`)
+            }}
             className="flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted/50"
           >
             <RotateCcw size={16} />
