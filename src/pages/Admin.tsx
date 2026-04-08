@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle } from 'lucide-react'
+import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search } from 'lucide-react'
 import { Header } from '@/components/Header'
 import {
   getDisciplines, saveDiscipline, deleteDiscipline,
@@ -22,8 +22,16 @@ export function Admin() {
   const [reports, setReports] = useState<{id:string;question_id:string;user_id:string;message:string;created_at:string}[]>([])
 
   // Forms
-  const [discForm, setDiscForm] = useState<{ id?: string; name: string; icon: string } | null>(null)
+  const [discForm, setDiscForm] = useState<{ id?: string; name: string; icon: string; group_name: string } | null>(null)
   const [subForm, setSubForm] = useState<{ id?: string; name: string; discipline_id: string; sort_order: string } | null>(null)
+  // ── Questions tab: filters / sort / selection ─────────────────────────────
+  const [qSearch, setQSearch] = useState('')
+  const [qFilterDisc, setQFilterDisc] = useState('')
+  const [qFilterSubject, setQFilterSubject] = useState('')
+  const [qFilterType, setQFilterType] = useState<'' | QuestionType>('')
+  const [qSort, setQSort] = useState<'recent' | 'discipline' | 'subject'>('recent')
+  const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set())
+
   const [qForm, setQForm] = useState<{
     id?: string; discipline_id: string; subject_id: string;
     type: QuestionType; statement: string; options: {letter:string;text:string}[];
@@ -66,7 +74,7 @@ export function Admin() {
   async function handleSaveDisc() {
     if (!discForm?.name.trim()) return toast.error('Nome obrigatório')
     try {
-      await saveDiscipline({ id: discForm.id, name: discForm.name, icon: discForm.icon || '📚' })
+      await saveDiscipline({ id: discForm.id, name: discForm.name, icon: discForm.icon || '📚', group_name: discForm.group_name || null })
       toast.success(discForm.id ? 'Matéria atualizada!' : 'Matéria criada!')
       setDiscForm(null); await loadAll()
     } catch { toast.error('Erro ao salvar matéria.') }
@@ -128,6 +136,67 @@ export function Admin() {
     catch { toast.error('Erro ao excluir questão.') }
   }
 
+  // ── Questions: derived filter/sort/selection ──────────────────────────────
+  const subjectsForQFilter = qFilterDisc
+    ? subjects.filter(s => s.discipline_id === qFilterDisc)
+    : subjects
+
+  const filteredQuestions = (() => {
+    const term = qSearch.trim().toLowerCase()
+    let result = questions.filter(q => {
+      if (qFilterDisc && q.discipline_id !== qFilterDisc) return false
+      if (qFilterSubject && q.subject_id !== qFilterSubject) return false
+      if (qFilterType && q.type !== qFilterType) return false
+      if (term) {
+        const disc = disciplines.find(d => d.id === q.discipline_id)
+        const sub = subjects.find(s => s.id === q.subject_id)
+        const haystack = [q.id, q.statement, disc?.name ?? '', sub?.name ?? '']
+          .join(' ').toLowerCase()
+        if (!haystack.includes(term)) return false
+      }
+      return true
+    })
+    if (qSort === 'recent') {
+      result = [...result].sort((a, b) => b.created_at.localeCompare(a.created_at))
+    } else if (qSort === 'discipline') {
+      result = [...result].sort((a, b) => {
+        const da = disciplines.find(d => d.id === a.discipline_id)?.name ?? ''
+        const db = disciplines.find(d => d.id === b.discipline_id)?.name ?? ''
+        return da.localeCompare(db, 'pt-BR')
+      })
+    } else if (qSort === 'subject') {
+      result = [...result].sort((a, b) => {
+        const sa = subjects.find(s => s.id === a.subject_id)?.name ?? ''
+        const sb = subjects.find(s => s.id === b.subject_id)?.name ?? ''
+        return sa.localeCompare(sb, 'pt-BR')
+      })
+    }
+    return result
+  })()
+
+  const allVisibleSelected =
+    filteredQuestions.length > 0 && filteredQuestions.every(q => selectedQIds.has(q.id))
+
+  function toggleSelectAll() {
+    setSelectedQIds(prev => {
+      const next = new Set(prev)
+      if (allVisibleSelected) {
+        filteredQuestions.forEach(q => next.delete(q.id))
+      } else {
+        filteredQuestions.forEach(q => next.add(q.id))
+      }
+      return next
+    })
+  }
+
+  function toggleSelectOne(id: string) {
+    setSelectedQIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'disciplines', label: 'Matérias', icon: <BookOpen size={16}/> },
     { id: 'subjects', label: 'Assuntos', icon: <FileText size={16}/> },
@@ -160,7 +229,7 @@ export function Admin() {
           <div className="flex flex-col gap-4">
             <div className="flex justify-between items-center">
               <h2 className="font-semibold">Matérias ({disciplines.length})</h2>
-              <button onClick={() => setDiscForm({ name: '', icon: '📚' })} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              <button onClick={() => setDiscForm({ name: '', icon: '📚', group_name: '' })} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
                 <Plus size={14}/>Nova Matéria
               </button>
             </div>
@@ -169,6 +238,11 @@ export function Admin() {
                 <h3 className="font-medium">{discForm.id ? 'Editar' : 'Nova'} Matéria</h3>
                 <input value={discForm.name} onChange={e => setDiscForm({...discForm, name: e.target.value})} placeholder="Nome *" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
                 <input value={discForm.icon} onChange={e => setDiscForm({...discForm, icon: e.target.value})} placeholder="Ícone (emoji)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+                <select value={discForm.group_name} onChange={e => setDiscForm({...discForm, group_name: e.target.value})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option value="">Sem pasta (não aparece na Home)</option>
+                  <option value="gerais">📚 Conhecimentos Gerais</option>
+                  <option value="especificos">⚖️ Conhecimentos Específicos</option>
+                </select>
                 <div className="flex gap-2">
                   <button onClick={handleSaveDisc} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">Salvar</button>
                   <button onClick={() => setDiscForm(null)} className="text-sm text-muted-foreground hover:text-foreground">Cancelar</button>
@@ -181,9 +255,16 @@ export function Admin() {
                   <span className="text-xl">{d.icon}</span>
                   <div className="flex-1">
                     <p className="font-medium">{d.name}</p>
-                    <p className="text-xs text-muted-foreground">{subjects.filter(s=>s.discipline_id===d.id).length} assuntos</p>
+                    <p className="text-xs text-muted-foreground">
+                      {subjects.filter(s=>s.discipline_id===d.id).length} assuntos
+                      {d.group_name && (
+                        <span className="ml-2 inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                          {d.group_name === 'gerais' ? '📚 Gerais' : '⚖️ Específicos'}
+                        </span>
+                      )}
+                    </p>
                   </div>
-                  <button onClick={() => setDiscForm({id:d.id, name:d.name, icon:d.icon})} className="p-1.5 text-muted-foreground hover:text-foreground"><Pencil size={15}/></button>
+                  <button onClick={() => setDiscForm({id:d.id, name:d.name, icon:d.icon, group_name:d.group_name??''})} className="p-1.5 text-muted-foreground hover:text-foreground"><Pencil size={15}/></button>
                   <button onClick={() => handleDeleteDisc(d.id)} className="p-1.5 text-muted-foreground hover:text-red-500"><Trash2 size={15}/></button>
                 </div>
               ))}
@@ -236,12 +317,64 @@ export function Admin() {
         {/* ── QUESTIONS ── */}
         {activeTab === 'questions' && (
           <div className="flex flex-col gap-4">
+            {/* Header */}
             <div className="flex justify-between items-center">
               <h2 className="font-semibold">Questões ({questions.length})</h2>
               <button onClick={() => setQForm(newQForm())} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
                 <Plus size={14}/>Nova Questão
               </button>
             </div>
+
+            {/* Filter bar */}
+            <div className="flex flex-col gap-2">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                <input
+                  value={qSearch}
+                  onChange={e => setQSearch(e.target.value)}
+                  placeholder="Buscar por ID, enunciado, matéria ou assunto..."
+                  className="w-full rounded-md border border-border bg-background pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={qFilterDisc}
+                  onChange={e => { setQFilterDisc(e.target.value); setQFilterSubject('') }}
+                  className="flex-1 min-w-[140px] rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Todas as matérias</option>
+                  {disciplines.map(d => <option key={d.id} value={d.id}>{d.icon} {d.name}</option>)}
+                </select>
+                <select
+                  value={qFilterSubject}
+                  onChange={e => setQFilterSubject(e.target.value)}
+                  className="flex-1 min-w-[140px] rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Todos os assuntos</option>
+                  {subjectsForQFilter.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <select
+                  value={qFilterType}
+                  onChange={e => setQFilterType(e.target.value as '' | QuestionType)}
+                  className="rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Todos os tipos</option>
+                  <option value="true_false">Certo / Errado</option>
+                  <option value="multiple_choice">Múltipla Escolha</option>
+                </select>
+                <select
+                  value={qSort}
+                  onChange={e => setQSort(e.target.value as typeof qSort)}
+                  className="rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="recent">Mais recentes</option>
+                  <option value="discipline">Por matéria</option>
+                  <option value="subject">Por assunto</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Question form (edit / new) */}
             {qForm && (
               <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
                 <h3 className="font-medium">{qForm.id ? 'Editar' : 'Nova'} Questão</h3>
@@ -304,13 +437,42 @@ export function Admin() {
                 </div>
               </div>
             )}
+
+            {/* Selection header */}
+            {filteredQuestions.length > 0 && (
+              <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleSelectAll}
+                  className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                />
+                <span>
+                  {selectedQIds.size > 0 && (
+                    <span className="text-foreground font-medium">{selectedQIds.size} selecionada{selectedQIds.size > 1 ? 's' : ''} · </span>
+                  )}
+                  {filteredQuestions.length} de {questions.length} questões
+                </span>
+              </div>
+            )}
+            {filteredQuestions.length === 0 && !qForm && (
+              <p className="text-center text-muted-foreground py-8 text-sm">Nenhuma questão encontrada.</p>
+            )}
+
+            {/* Question list */}
             <div className="flex flex-col gap-2">
-              {questions.map(q => {
+              {filteredQuestions.map(q => {
                 const sub = subjects.find(s => s.id === q.subject_id)
                 const disc = disciplines.find(d => d.id === q.discipline_id)
                 return (
-                  <div key={q.id} className="rounded-xl border border-border bg-card p-3">
+                  <div key={q.id} className={cn('rounded-xl border bg-card p-3 transition-colors', selectedQIds.has(q.id) ? 'border-primary/50 bg-primary/5' : 'border-border')}>
                     <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedQIds.has(q.id)}
+                        onChange={() => toggleSelectOne(q.id)}
+                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-primary cursor-pointer"
+                      />
                       <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium shrink-0', q.type==='true_false' ? 'bg-amber-100 text-amber-700' : 'bg-primary/10 text-primary')}>
                         {q.type==='true_false'?'C/E':'MC'}
                       </span>
@@ -325,7 +487,14 @@ export function Admin() {
                         <button onClick={() => handleDeleteQ(q.id)} className="p-1 text-muted-foreground hover:text-red-500"><Trash2 size={14}/></button>
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">{disc?.icon} {disc?.name} › {sub?.name}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span
+                        title={q.id}
+                        className="font-mono text-xs text-muted-foreground/60 cursor-default select-all"
+                      >{q.id.slice(0, 8)}</span>
+                      <span className="text-muted-foreground/40 text-xs">·</span>
+                      <p className="text-xs text-muted-foreground">{disc?.icon} {disc?.name} › {sub?.name}</p>
+                    </div>
                   </div>
                 )
               })}
