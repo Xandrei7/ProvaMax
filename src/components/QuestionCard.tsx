@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Flag, ChevronDown, ChevronUp, Bookmark, Lightbulb } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Flag, ChevronDown, ChevronUp, Bookmark, Lightbulb, Scissors } from 'lucide-react'
 import { cn, normalizeAnswer, displayAnswer } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { submitReport } from '@/lib/dataService'
@@ -39,12 +39,16 @@ export function QuestionCard({
   const { user } = useAuth()
 
   // Only UI state lives here — never selection or submission
+  const [eliminated, setEliminated] = useState<Set<string>>(new Set())
+  const touchStartRef = useRef<Record<string, { x: number; y: number }>>({})
+  const [associatedOpen, setAssociatedOpen] = useState(false)
   const [commentOpen, setCommentOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
   const [reportText, setReportText] = useState('')
 
   // Reset UI-only state when question changes
   useEffect(() => {
+    setAssociatedOpen(false)
     setCommentOpen(false)
     setReportOpen(false)
     setReportText('')
@@ -54,6 +58,15 @@ export function QuestionCard({
   const safeCorrect  = normalizeAnswer(question.correct_answer, question.type)
 
   const isCorrect = safeSelected !== '' && safeSelected === safeCorrect
+
+  function toggleEliminate(letter: string) {
+    if (submitted) return
+    setEliminated(prev => {
+      const next = new Set(prev)
+      if (next.has(letter)) next.delete(letter); else next.add(letter)
+      return next
+    })
+  }
 
   async function handleReport() {
     if (!reportText.trim() || !user) return
@@ -129,40 +142,101 @@ export function QuestionCard({
         </div>
       )}
 
+      {/* Associated text — collapsible, only when present */}
+      {question.associated_text && (
+        <div className="rounded-lg border border-blue-200 dark:border-blue-900/50 overflow-hidden">
+          <button
+            onClick={() => setAssociatedOpen(v => !v)}
+            className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50/60 dark:hover:bg-blue-950/20 transition-colors"
+          >
+            <span>Texto associado {associatedOpen ? '(−)' : '(+)'}</span>
+            {associatedOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          </button>
+          {associatedOpen && (
+            <div className="border-t border-blue-200 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/10 px-4 py-3">
+              <p
+                className="text-sm leading-relaxed text-foreground/90 whitespace-pre-line"
+                dangerouslySetInnerHTML={{ __html: question.associated_text ?? '' }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Statement */}
-      <p className="text-base leading-relaxed">{question.statement}</p>
+      <p className="text-base leading-relaxed" dangerouslySetInnerHTML={{ __html: question.statement }} />
 
       {/* Options */}
       <div className={cn('flex flex-col gap-2', question.type === 'true_false' && 'flex-row')}>
         {options.map(opt => {
-          const optNorm    = normalizeAnswer(opt.letter, question.type)
-          const isSelected    = safeSelected === optNorm
-          const isCorrectOpt  = optNorm === safeCorrect
+          const optNorm      = normalizeAnswer(opt.letter, question.type)
+          const isSelected   = safeSelected === optNorm
+          const isCorrectOpt = optNorm === safeCorrect
+          const isEliminated = !submitted && eliminated.has(opt.letter)
+          const showScissors = question.type === 'multiple_choice' && !submitted
 
           return (
-            <button
+            <div
               key={opt.letter}
-              onClick={() => { if (!submitted) onSelect(opt.letter) }}
-              disabled={submitted}
               className={cn(
-                'flex items-start gap-3 rounded-lg border px-4 py-3 text-left text-sm transition-colors',
-                question.type === 'true_false' && 'flex-1 justify-center',
-                // Not answered yet
-                !submitted && !isSelected && 'border-border hover:border-primary hover:bg-primary/5',
-                !submitted && isSelected && 'border-primary bg-primary/10',
-                // Answered: correct option always green
-                submitted && isCorrectOpt && 'border-green-500 bg-green-50 text-green-700 dark:bg-green-950/30 dark:text-green-400',
-                // Answered: selected wrong option red
-                submitted && isSelected && !isCorrectOpt && 'border-red-500 bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400',
-                // Answered: other wrong options faded
-                submitted && !isSelected && !isCorrectOpt && 'opacity-40',
+                'flex items-center gap-1',
+                question.type === 'true_false' && 'flex-1',
+                isEliminated && 'opacity-50',
               )}
             >
-              {question.type !== 'true_false' && (
-                <span className="font-bold shrink-0">{opt.letter}.</span>
+              <button
+                onClick={() => { if (!submitted) onSelect(opt.letter) }}
+                disabled={submitted}
+                onTouchStart={showScissors ? e => {
+                  touchStartRef.current[opt.letter] = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+                } : undefined}
+                onTouchEnd={showScissors ? e => {
+                  const start = touchStartRef.current[opt.letter]
+                  if (!start) return
+                  const dx = e.changedTouches[0].clientX - start.x
+                  const dy = Math.abs(e.changedTouches[0].clientY - start.y)
+                  if (Math.abs(dx) > 50 && Math.abs(dx) > dy) {
+                    setEliminated(prev => {
+                      const next = new Set(prev)
+                      if (dx < 0) next.add(opt.letter); else next.delete(opt.letter)
+                      return next
+                    })
+                  }
+                } : undefined}
+                className={cn(
+                  'flex flex-1 items-start gap-3 rounded-lg border px-4 py-3 text-left text-sm transition-colors',
+                  question.type === 'true_false' && 'justify-center',
+                  // Not answered yet
+                  !submitted && !isSelected && 'border-border hover:border-primary hover:bg-primary/5',
+                  !submitted && isSelected && 'border-primary bg-primary/10',
+                  // Answered: correct option always green
+                  submitted && isCorrectOpt && 'border-green-500 bg-green-50 text-green-700 dark:bg-green-950/30 dark:text-green-400',
+                  // Answered: selected wrong option red
+                  submitted && isSelected && !isCorrectOpt && 'border-red-500 bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400',
+                  // Answered: other wrong options faded
+                  submitted && !isSelected && !isCorrectOpt && 'opacity-40',
+                )}
+              >
+                {question.type !== 'true_false' && (
+                  <span className={cn('font-bold shrink-0', isEliminated && 'line-through')}>{opt.letter}.</span>
+                )}
+                <span className={cn(isEliminated && 'line-through')} dangerouslySetInnerHTML={{ __html: opt.text }} />
+              </button>
+              {showScissors && (
+                <button
+                  onClick={() => toggleEliminate(opt.letter)}
+                  className={cn(
+                    'shrink-0 rounded p-1.5 transition-colors',
+                    eliminated.has(opt.letter)
+                      ? 'text-red-400 hover:text-muted-foreground'
+                      : 'text-muted-foreground opacity-40 hover:opacity-100 hover:text-foreground',
+                  )}
+                  title={eliminated.has(opt.letter) ? 'Reativar alternativa' : 'Eliminar alternativa'}
+                >
+                  <Scissors size={14} />
+                </button>
               )}
-              <span>{opt.text}</span>
-            </button>
+            </div>
           )
         })}
       </div>
@@ -195,7 +269,7 @@ export function QuestionCard({
           </button>
           {commentOpen && (
             <div className="border-t border-border px-4 py-3 flex flex-col gap-3">
-              <p className="text-sm leading-relaxed">{question.comment}</p>
+              <p className="text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: question.comment ?? '' }} />
               {question.legal_basis && (
                 <div className="flex gap-2 text-sm text-muted-foreground">
                   <Bookmark size={14} className="shrink-0 mt-0.5" />
