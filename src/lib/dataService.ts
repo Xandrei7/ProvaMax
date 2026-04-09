@@ -412,7 +412,7 @@ export async function saveDiscipline(discipline: Partial<Discipline> & { name: s
   if (discipline.id) {
     const { error } = await supabase
       .from('disciplines')
-      .update({ name: discipline.name, icon: discipline.icon })
+      .update({ name: discipline.name, icon: discipline.icon, group_name: discipline.group_name ?? null })
       .eq('id', discipline.id)
 
     if (error) throw error
@@ -421,7 +421,7 @@ export async function saveDiscipline(discipline: Partial<Discipline> & { name: s
 
   const { error } = await supabase
     .from('disciplines')
-    .insert({ name: discipline.name, icon: discipline.icon ?? '📚' })
+    .insert({ name: discipline.name, icon: discipline.icon ?? '📚', group_name: discipline.group_name ?? null })
 
   if (error) throw error
 }
@@ -468,7 +468,11 @@ export async function deleteSubject(id: string) {
 // -- QUESTIONS ----------------------------------------------------------------
 
 export async function getQuestions(filter?: { subjectId?: string; disciplineId?: string }): Promise<Question[]> {
-  let query = supabase.from('questions').select('*').order('sort_order').order('created_at')
+  let query = supabase
+    .from('questions')
+    .select('*')
+    .order('sort_order', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true })
 
   if (filter?.subjectId) query = query.eq('subject_id', filter.subjectId)
   if (filter?.disciplineId) query = query.eq('discipline_id', filter.disciplineId)
@@ -487,6 +491,7 @@ export async function saveQuestion(question: Partial<Question> & { statement: st
     comment: question.comment ?? '',
     legal_basis: question.legal_basis ?? null,
     exam_tips: question.exam_tips ?? null,
+    associated_text: question.associated_text ?? null,
     subject_id: question.subject_id,
     discipline_id: question.discipline_id,
     sort_order: question.sort_order ?? 0,

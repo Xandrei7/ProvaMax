@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search } from 'lucide-react'
+import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 import { Header } from '@/components/Header'
 import {
   getDisciplines, saveDiscipline, deleteDiscipline,
@@ -29,8 +30,9 @@ export function Admin() {
   const [qFilterDisc, setQFilterDisc] = useState('')
   const [qFilterSubject, setQFilterSubject] = useState('')
   const [qFilterType, setQFilterType] = useState<'' | QuestionType>('')
-  const [qSort, setQSort] = useState<'recent' | 'discipline' | 'subject'>('recent')
+  const [qSort, setQSort] = useState<'recent' | 'discipline' | 'subject' | 'order'>('recent')
   const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set())
+  const [pendingOrder, setPendingOrder] = useState<Map<string, number> | null>(null)
 
   const [qForm, setQForm] = useState<{
     id?: string; discipline_id: string; subject_id: string;
@@ -170,6 +172,12 @@ export function Admin() {
         const sb = subjects.find(s => s.id === b.subject_id)?.name ?? ''
         return sa.localeCompare(sb, 'pt-BR')
       })
+    } else if (qSort === 'order') {
+      result = [...result].sort((a, b) => {
+        const aOrder = pendingOrder?.get(a.id) ?? a.sort_order ?? 0
+        const bOrder = pendingOrder?.get(b.id) ?? b.sort_order ?? 0
+        return aOrder - bOrder
+      })
     }
     return result
   })()
@@ -218,6 +226,63 @@ export function Admin() {
     } else {
       fallbackCopy(text)
     }
+  }
+
+  function handleReorderQ(q: Question, direction: 'up' | 'down') {
+    const idx = filteredQuestions.findIndex(fq => fq.id === q.id)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= filteredQuestions.length) return
+
+    const other = filteredQuestions[swapIdx]
+    const aOrder = pendingOrder?.get(q.id) ?? q.sort_order ?? 0
+    const bOrder = pendingOrder?.get(other.id) ?? other.sort_order ?? 0
+
+    const newMap = new Map(pendingOrder ?? [])
+    if (aOrder === bOrder) {
+      newMap.set(q.id, direction === 'up' ? bOrder - 1 : bOrder + 1)
+    } else {
+      newMap.set(q.id, bOrder)
+      newMap.set(other.id, aOrder)
+    }
+    setPendingOrder(newMap)
+  }
+
+  async function handleSaveOrder() {
+    if (!pendingOrder) return
+
+    // Normalize: assign 0, 1, 2... to the current filtered order (resolves duplicates)
+    // Snapshot filteredQuestions before any state mutation
+    const snapshot = filteredQuestions.map((q, idx) => ({ id: q.id, sort_order: idx }))
+    const prevOrders = new Map(snapshot.map(u => {
+      const q = questions.find(qq => qq.id === u.id)
+      return [u.id, q?.sort_order ?? 0]
+    }))
+
+    // Optimistic: apply to local state immediately
+    setQuestions(prev => {
+      const map = new Map(snapshot.map(u => [u.id, u.sort_order]))
+      return prev.map(q => ({ ...q, sort_order: map.get(q.id) ?? q.sort_order }))
+    })
+
+    const results = await Promise.all(
+      snapshot.map(u => supabase.from('questions').update({ sort_order: u.sort_order }).eq('id', u.id))
+    )
+
+    if (results.some(r => r.error)) {
+      toast.error('Erro ao salvar ordem.')
+      // Rollback local state
+      setQuestions(prev => prev.map(q => ({
+        ...q,
+        sort_order: prevOrders.has(q.id) ? prevOrders.get(q.id)! : q.sort_order,
+      })))
+    } else {
+      toast.success('Ordem salva!')
+      setPendingOrder(null)
+    }
+  }
+
+  function handleCancelOrder() {
+    setPendingOrder(null)
   }
 
   function fallbackCopy(text: string) {
@@ -404,12 +469,13 @@ export function Admin() {
                 </select>
                 <select
                   value={qSort}
-                  onChange={e => setQSort(e.target.value as typeof qSort)}
+                  onChange={e => { const v = e.target.value as typeof qSort; setQSort(v); if (v !== 'order') setPendingOrder(null) }}
                   className="rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="recent">Mais recentes</option>
                   <option value="discipline">Por matéria</option>
                   <option value="subject">Por assunto</option>
+                  <option value="order">Por ordem (sort_order)</option>
                 </select>
               </div>
             </div>
@@ -493,6 +559,22 @@ export function Admin() {
                   )}
                   {filteredQuestions.length} de {questions.length} questões
                 </span>
+                {qSort === 'order' && pendingOrder !== null && (
+                  <>
+                    <button
+                      onClick={handleSaveOrder}
+                      className="flex items-center gap-1 rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                    >
+                      <Check size={12}/>Salvar ordem
+                    </button>
+                    <button
+                      onClick={handleCancelOrder}
+                      className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
+                    >
+                      <X size={12}/>Cancelar alterações
+                    </button>
+                  </>
+                )}
                 {selectedQIds.size > 0 && (
                   <button
                     onClick={copySelectedToClipboard}
@@ -526,6 +608,22 @@ export function Admin() {
                       </span>
                       <p className="text-sm flex-1 line-clamp-2">{q.statement}</p>
                       <div className="flex gap-1 shrink-0">
+                        {qSort === 'order' && (
+                          <>
+                            <button
+                              onClick={() => handleReorderQ(q, 'up')}
+                              disabled={filteredQuestions.indexOf(q) === 0}
+                              className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-25 disabled:cursor-not-allowed"
+                              title="Subir"
+                            ><ChevronUp size={14}/></button>
+                            <button
+                              onClick={() => handleReorderQ(q, 'down')}
+                              disabled={filteredQuestions.indexOf(q) === filteredQuestions.length - 1}
+                              className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-25 disabled:cursor-not-allowed"
+                              title="Descer"
+                            ><ChevronDown size={14}/></button>
+                          </>
+                        )}
                         <button onClick={() => setQForm({
                           id:q.id, discipline_id:q.discipline_id, subject_id:q.subject_id,
                           type:q.type, statement:q.statement, options:q.options??[{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}],
