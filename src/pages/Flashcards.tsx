@@ -24,7 +24,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import type { Discipline, Flashcard, Subject } from '@/types'
 
 type Phase = 'overview' | 'reviewing' | 'finished'
-type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only'
+type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only' | 'critical'
 type DisplayMode = 'quick' | 'deep'
 type QuickSection = 'all' | 'new' | 'reviewing' | 'mastered' | 'simulado' | 'study'
 type ReviewAction = 'correct' | 'easy' | 'wrong' | 'skip' | 'mastered'
@@ -184,21 +184,35 @@ export function Flashcards() {
     [subjects],
   )
 
-  // ── Contadores ──────────────────────────────────────────────────────────────
+  // ── Base filtrada pelo seletor de disciplina do Modo Elite ─────────────────
+  const eliteCards = useMemo(
+    () => reviewDiscipline === 'all'
+      ? flashcards
+      : flashcards.filter(c => c.discipline_id === reviewDiscipline),
+    [flashcards, reviewDiscipline],
+  )
+
+  // ── Contadores (todos dependem de eliteCards para refletir a disciplina) ────
   const now = new Date()
-  const dueCount = flashcards.filter(
+  const dueCount = eliteCards.filter(
     c => c.status !== 'mastered' && (!c.next_review_at || new Date(c.next_review_at) <= now),
   ).length
-  const newCount = flashcards.filter(c => c.status === 'new').length
-  const reviewingCount = flashcards.filter(c => c.status === 'reviewing').length
-  const masteredCount = flashcards.filter(c => c.status === 'mastered').length
+  const newCount = eliteCards.filter(c => c.status === 'new').length
+  const reviewingCount = eliteCards.filter(c => c.status === 'reviewing').length
+  const masteredCount = eliteCards.filter(c => c.status === 'mastered').length
   const simuladoCount = flashcards.filter(c => c.source_type === 'simulado').length
   const studyCount = flashcards.filter(c => c.source_type === 'study').length
-  const errorsOnlyCount = flashcards.filter(c => c.times_wrong > 0 && c.status !== 'mastered').length
-  const hardCount = flashcards.filter(c => getDifficultyScore(c) > 0.3 && c.status !== 'mastered').length
-  const vesperaCount = flashcards.filter(
+  const errorsOnlyCount = eliteCards.filter(c => c.times_wrong > 0 && c.status !== 'mastered').length
+  const hardCount = eliteCards.filter(c => getDifficultyScore(c) > 0.3 && c.status !== 'mastered').length
+  const vesperaCount = eliteCards.filter(
     c => c.status !== 'mastered' && (c.times_wrong > 0 || (c.interval_days ?? 1) <= 7),
   ).length
+  const criticalCount = (() => {
+    try {
+      const crits = new Set<string>(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]'))
+      return eliteCards.filter(c => crits.has(c.question_id) && c.status !== 'mastered').length
+    } catch { return 0 }
+  })()
 
   // ── Filtros da lista ────────────────────────────────────────────────────────
   const sectionFiltered = useMemo(() => {
@@ -225,7 +239,7 @@ export function Flashcards() {
   // ── Adaptação automática: performance por disciplina ────────────────────────
   const disciplinePerformance = useMemo(() => {
     const map = new Map<string, { errors: number; total: number; name: string }>()
-    for (const card of flashcards) {
+    for (const card of eliteCards) {
       const entry = map.get(card.discipline_id) ?? {
         errors: 0,
         total: 0,
@@ -240,7 +254,7 @@ export function Flashcards() {
       .filter(d => d.errors > 0)
       .sort((a, b) => b.errorRate - a.errorRate)
       .slice(0, 5)
-  }, [flashcards, disciplineNameById])
+  }, [eliteCards, disciplineNameById])
 
   const groupedByDiscipline = useMemo(() => {
     const counts = new Map<string, number>()
@@ -258,8 +272,19 @@ export function Flashcards() {
 
   // ── Ações ────────────────────────────────────────────────────────────────────
 
+  function getCriticalIds(): Set<string> {
+    try { return new Set(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]')) } catch { return new Set() }
+  }
+
   function startReview(mode: ReviewMode, discId = reviewDiscipline) {
-    const queue = buildEliteQueue(flashcards, mode, discId)
+    let queue: Flashcard[]
+    if (mode === 'critical') {
+      const crits = getCriticalIds()
+      const base = discId !== 'all' ? flashcards.filter(c => c.discipline_id === discId) : flashcards
+      queue = base.filter(c => crits.has(c.question_id) && c.status !== 'mastered')
+    } else {
+      queue = buildEliteQueue(flashcards, mode, discId)
+    }
     if (queue.length === 0) {
       setPhase('finished')
       return
@@ -589,6 +614,16 @@ export function Flashcards() {
                 <span>Só Difíceis</span>
                 <span className="opacity-80">{hardCount} cards</span>
               </button>
+
+              <button
+                onClick={() => startReview('critical', reviewDiscipline)}
+                disabled={criticalCount === 0}
+                className="col-span-2 rounded-xl bg-rose-700 text-white px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
+              >
+                <ShieldAlert size={16} />
+                <span>Críticos (P / C)</span>
+                <span className="opacity-80">{criticalCount} cards</span>
+              </button>
             </div>
 
             {/* Toggle Rápido/Profundo */}
@@ -615,7 +650,7 @@ export function Flashcards() {
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border border-border bg-card p-4">
               <p className="text-xs text-muted-foreground">Total</p>
-              <p className="text-2xl font-bold">{flashcards.length}</p>
+              <p className="text-2xl font-bold">{eliteCards.length}</p>
             </div>
             <div className="rounded-xl border border-border bg-card p-4">
               <p className="text-xs text-muted-foreground">Novos</p>

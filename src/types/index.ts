@@ -2,6 +2,7 @@ export interface Discipline {
   id: string
   name: string
   icon: string
+  group_name: string | null
   created_at: string
 }
 
@@ -29,6 +30,7 @@ export interface Question {
   comment: string
   legal_basis: string | null
   exam_tips: string | null
+  associated_text: string | null
   subject_id: string
   discipline_id: string
   sort_order: number

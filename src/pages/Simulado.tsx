@@ -101,6 +101,7 @@ export function Simulado() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [simAnswers, setSimAnswers] = useState<SimAnswer[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const [confidence, setConfidence] = useState<'P' | 'C' | null>(null)
   const [eliminated, setEliminated] = useState<Set<string>>(new Set())
   const touchStartRef = useRef<Record<string, { x: number; y: number }>>({})
   const [timeLeft, setTimeLeft] = useState(0)
@@ -195,6 +196,7 @@ export function Simulado() {
     setSimAnswers([])
     setCurrentIndex(0)
     setSelected(null)
+    setConfidence(null)
     setEliminated(new Set())
     setActiveTime(mins * 60)
     setTimeLeft(mins * 60)
@@ -215,7 +217,14 @@ export function Simulado() {
     }
     const updated = [...simAnswersRef.current, newAnswer]
     setSimAnswers(updated)
+    // Update critical set in localStorage
+    try {
+      const crits = new Set<string>(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]'))
+      if (confidence !== null) { crits.add(q.id) } else if (newAnswer.isCorrect) { crits.delete(q.id) }
+      localStorage.setItem('provamax_critical_qids', JSON.stringify([...crits]))
+    } catch {}
     setSelected(null)
+    setConfidence(null)
     setEliminated(new Set())
 
     if (currentIndex === questions.length - 1) {
@@ -265,6 +274,7 @@ export function Simulado() {
       .then(saved => {
         // Generate flashcards for wrong answers in the background
         const wrongAnswers = answers.filter(a => !a.isCorrect && a.selected !== null)
+        const wrongIds = new Set(wrongAnswers.map(wa => wa.questionId))
         for (const wa of wrongAnswers) {
           const q = questionsRef.current.find(q => q.id === wa.questionId)
           if (q) {
@@ -276,6 +286,16 @@ export function Simulado() {
             }).catch(console.error)
           }
         }
+        // Generate flashcards for P/C-marked correct answers so they appear in Críticos
+        try {
+          const crits = new Set<string>(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]'))
+          answers
+            .filter(a => a.isCorrect && a.selected !== null && crits.has(a.questionId) && !wrongIds.has(a.questionId))
+            .forEach(a => {
+              const q = questionsRef.current.find(q => q.id === a.questionId)
+              if (q) generateFlashcard({ question: q, selectedAnswer: a.selected as string, sourceType: 'simulado', simuladoId: saved.id }).catch(console.error)
+            })
+        } catch {}
       })
       .catch(err => console.error('[simulado] erro ao salvar:', err))
     }
@@ -355,7 +375,7 @@ export function Simulado() {
 
         <main className="mx-auto w-full max-w-lg flex-1 px-4 py-4 pb-8">
           <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-muted-foreground">Questão {currentIndex + 1} de {questions.length}</span>
               <span className={cn(
                 'rounded-full px-2 py-0.5 text-xs font-medium',
@@ -363,6 +383,20 @@ export function Simulado() {
               )}>
                 {currentQuestion.type === 'true_false' ? 'C/E' : 'Múltipla escolha'}
               </span>
+              {currentQuestion.type === 'multiple_choice' && (
+                <>
+                  <button
+                    title="Pensei: acertei raciocinando"
+                    onClick={() => setConfidence(c => c === 'P' ? null : 'P')}
+                    className={cn('rounded-full px-2 py-0.5 text-xs font-semibold border transition-colors', confidence === 'P' ? 'bg-orange-100 text-orange-600 border-orange-400 dark:bg-orange-900/30 dark:text-orange-400' : 'border-border text-muted-foreground hover:border-orange-300')}
+                  >P</button>
+                  <button
+                    title="Chutei: marquei sem segurança"
+                    onClick={() => setConfidence(c => c === 'C' ? null : 'C')}
+                    className={cn('rounded-full px-2 py-0.5 text-xs font-semibold border transition-colors', confidence === 'C' ? 'bg-red-100 text-red-600 border-red-400 dark:bg-red-900/30 dark:text-red-400' : 'border-border text-muted-foreground hover:border-red-300')}
+                  >C</button>
+                </>
+              )}
             </div>
 
             <p className="text-base leading-relaxed">{currentQuestion.statement}</p>
