@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Clock, CheckCircle2, ChevronRight, Shuffle, BrainCircuit, ChevronDown, ChevronUp } from 'lucide-react'
+import { Clock, CheckCircle2, ChevronRight, Shuffle, BrainCircuit, ChevronDown, ChevronUp, Scissors } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { ProgressBar } from '@/components/ProgressBar'
@@ -101,6 +101,8 @@ export function Simulado() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [simAnswers, setSimAnswers] = useState<SimAnswer[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const [eliminated, setEliminated] = useState<Set<string>>(new Set())
+  const touchStartRef = useRef<Record<string, { x: number; y: number }>>({})
   const [timeLeft, setTimeLeft] = useState(0)
   const [activeTime, setActiveTime] = useState(0)
   const [isAdvancedRun, setIsAdvancedRun] = useState(false)
@@ -193,6 +195,7 @@ export function Simulado() {
     setSimAnswers([])
     setCurrentIndex(0)
     setSelected(null)
+    setEliminated(new Set())
     setActiveTime(mins * 60)
     setTimeLeft(mins * 60)
     setIsAdvancedRun(isAdv)
@@ -213,6 +216,7 @@ export function Simulado() {
     const updated = [...simAnswersRef.current, newAnswer]
     setSimAnswers(updated)
     setSelected(null)
+    setEliminated(new Set())
 
     if (currentIndex === questions.length - 1) {
       finishedRef.current = true
@@ -364,22 +368,46 @@ export function Simulado() {
             <p className="text-base leading-relaxed">{currentQuestion.statement}</p>
 
             <div className={cn('flex flex-col gap-2', currentQuestion.type === 'true_false' && 'flex-row')}>
-              {options.map(opt => (
-                <button
-                  key={opt.letter}
-                  onClick={() => setSelected(opt.letter)}
-                  className={cn(
-                    'flex items-start gap-3 rounded-lg border px-4 py-3 text-left text-sm transition-colors',
-                    currentQuestion.type === 'true_false' && 'flex-1 justify-center',
-                    selected === opt.letter
-                      ? 'border-primary bg-primary/10'
-                      : 'border-border hover:border-primary hover:bg-primary/5'
-                  )}
-                >
-                  {currentQuestion.type !== 'true_false' && <span className="font-bold shrink-0">{opt.letter}.</span>}
-                  <span>{opt.text}</span>
-                </button>
-              ))}
+              {options.map(opt => {
+                const isElim = eliminated.has(opt.letter)
+                const showScissors = currentQuestion.type === 'multiple_choice'
+                return (
+                  <div key={opt.letter} className={cn('flex items-center gap-1', currentQuestion.type === 'true_false' && 'flex-1', isElim && 'opacity-50')}>
+                    <button
+                      onClick={() => setSelected(opt.letter)}
+                      onTouchStart={showScissors ? e => { touchStartRef.current[opt.letter] = { x: e.touches[0].clientX, y: e.touches[0].clientY } } : undefined}
+                      onTouchEnd={showScissors ? e => {
+                        const start = touchStartRef.current[opt.letter]
+                        if (!start) return
+                        const dx = e.changedTouches[0].clientX - start.x
+                        const dy = Math.abs(e.changedTouches[0].clientY - start.y)
+                        if (Math.abs(dx) > 50 && Math.abs(dx) > dy) {
+                          setEliminated(prev => { const next = new Set(prev); if (dx < 0) next.add(opt.letter); else next.delete(opt.letter); return next })
+                        }
+                      } : undefined}
+                      className={cn(
+                        'flex flex-1 items-start gap-3 rounded-lg border px-4 py-3 text-left text-sm transition-colors',
+                        currentQuestion.type === 'true_false' && 'justify-center',
+                        selected === opt.letter
+                          ? 'border-primary bg-primary/10'
+                          : 'border-border hover:border-primary hover:bg-primary/5'
+                      )}
+                    >
+                      {currentQuestion.type !== 'true_false' && <span className={cn('font-bold shrink-0', isElim && 'line-through')}>{opt.letter}.</span>}
+                      <span className={cn(isElim && 'line-through')}>{opt.text}</span>
+                    </button>
+                    {showScissors && (
+                      <button
+                        onClick={() => setEliminated(prev => { const next = new Set(prev); if (next.has(opt.letter)) next.delete(opt.letter); else next.add(opt.letter); return next })}
+                        className={cn('shrink-0 rounded p-1.5 transition-colors', isElim ? 'text-red-400 hover:text-muted-foreground' : 'text-muted-foreground opacity-40 hover:opacity-100 hover:text-foreground')}
+                        title={isElim ? 'Reativar alternativa' : 'Eliminar alternativa'}
+                      >
+                        <Scissors size={14} />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
 
             <button
