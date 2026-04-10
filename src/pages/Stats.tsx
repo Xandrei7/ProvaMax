@@ -360,6 +360,107 @@ export function Stats() {
                   </div>
                 </div>
 
+                {/* ── Ranking visual por disciplina */}
+                {(() => {
+                  const ranking = stats
+                    .map(({ discipline, questions }) => {
+                      const acc = getAccuracy(questions.map(q => q.id))
+                      return acc ? { discipline, acc } : null
+                    })
+                    .filter((x): x is { discipline: Discipline; acc: { correct: number; answered: number; percent: number } } => x !== null)
+                    // Critério principal: % de acerto. Desempate: mais respondido primeiro (amostra mais representante).
+                    .sort((a, b) =>
+                      a.acc.percent !== b.acc.percent
+                        ? a.acc.percent - b.acc.percent
+                        : b.acc.answered - a.acc.answered
+                    )
+
+                  const MIN_SAMPLE = 10
+                  const reliable  = ranking.filter(r => r.acc.answered >= MIN_SAMPLE)
+                  const lowSample = ranking.filter(r => r.acc.answered > 0 && r.acc.answered < MIN_SAMPLE)
+
+                  if (ranking.length < 2) return null
+                  const best  = reliable.length > 0 ? reliable[reliable.length - 1] : null
+                  const worst = reliable.length > 0 ? reliable[0] : null
+
+                  return (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h2 className="font-semibold">Desempenho por disciplina</h2>
+                        <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground">
+                          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />≥70%</span>
+                          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-400 shrink-0" />50–69%</span>
+                          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />&lt;50%</span>
+                        </div>
+                      </div>
+
+                      {best && worst ? (
+                        <div className="grid grid-cols-2 gap-2 mb-3">
+                          <div className="rounded-xl border border-green-200 dark:border-green-900/40 bg-green-50/60 dark:bg-green-950/20 px-3 py-2.5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-green-600 dark:text-green-400 mb-1">Melhor desempenho</p>
+                            <p className="text-xs font-medium truncate">{best.discipline.icon} {best.discipline.name}</p>
+                            <p className="text-xl font-bold text-green-600 dark:text-green-400 mt-0.5">{best.acc.percent}% acertos</p>
+                            <p className="text-[10px] text-muted-foreground">{best.acc.answered - best.acc.correct} erros de {best.acc.answered}</p>
+                          </div>
+                          <div className="rounded-xl border border-red-200 dark:border-red-900/40 bg-red-50/60 dark:bg-red-950/20 px-3 py-2.5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:text-red-400 mb-1">Pior desempenho</p>
+                            <p className="text-xs font-medium truncate">{worst.discipline.icon} {worst.discipline.name}</p>
+                            <p className="text-xl font-bold text-red-500 dark:text-red-400 mt-0.5">{worst.acc.percent}% acertos</p>
+                            <p className="text-[10px] text-muted-foreground">{worst.acc.answered - worst.acc.correct} erros de {worst.acc.answered}</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground mb-3 px-1">Responda ao menos {MIN_SAMPLE} questões em uma disciplina para ver o diagnóstico.</p>
+                      )}
+
+                      <div className="rounded-xl border border-border bg-card px-4 py-3 flex flex-col gap-3">
+                        {reliable.length > 0 && (
+                          <>
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground -mb-1">Taxa de acerto · pior → melhor</p>
+                            {reliable.map(({ discipline, acc }) => {
+                              const barColor = acc.percent >= 70 ? 'bg-green-500' : acc.percent >= 50 ? 'bg-amber-400' : 'bg-red-500'
+                              const textColor = acc.percent >= 70 ? 'text-green-600' : acc.percent >= 50 ? 'text-amber-500' : 'text-red-500'
+                              const errCount = acc.answered - acc.correct
+                              return (
+                                <div key={discipline.id}>
+                                  <div className="flex items-center justify-between text-xs mb-1.5">
+                                    <span className="truncate max-w-[55%] font-medium">{discipline.icon} {discipline.name}</span>
+                                    <span className="shrink-0 tabular-nums flex items-center gap-1.5">
+                                      <span className="text-muted-foreground">{errCount} erro{errCount !== 1 ? 's' : ''}</span>
+                                      <span className={cn('font-bold', textColor)}>{acc.percent}%</span>
+                                    </span>
+                                  </div>
+                                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                                    <div className={cn('h-full rounded-full', barColor)} style={{ width: `${acc.percent}%` }} />
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </>
+                        )}
+                        {lowSample.length > 0 && (
+                          <>
+                            <p className={cn('text-[10px] font-semibold uppercase tracking-wider text-muted-foreground -mb-1', reliable.length > 0 && 'border-t border-border pt-3')}>
+                              Em observação (menos de {MIN_SAMPLE} respondidas)
+                            </p>
+                            {lowSample.map(({ discipline, acc }) => (
+                              <div key={discipline.id} className="opacity-50">
+                                <div className="flex items-center justify-between text-xs mb-1.5">
+                                  <span className="truncate max-w-[55%] font-medium">{discipline.icon} {discipline.name}</span>
+                                  <span className="shrink-0 tabular-nums text-muted-foreground">{acc.answered} respondidas</span>
+                                </div>
+                                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                                  <div className="h-full rounded-full bg-muted-foreground/40" style={{ width: `${acc.percent}%` }} />
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 {/* Per discipline + subject */}
                 <div>
                   <h2 className="font-semibold mb-2">Por matéria</h2>
