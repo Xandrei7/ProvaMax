@@ -12,6 +12,25 @@ import type { Discipline, Subject, Question, SimuladoRecord } from '@/types'
 
 type StatsTab = 'geral' | 'simulados'
 
+// ── Contagem diária/semanal com suporte a pausas ────────────────────────────
+const PAUSE_KEY        = 'provamax_count_pauses'
+const COUNT_RESET_KEY  = 'provamax_count_reset'
+const STATS_BASE_KEY   = 'provamax_stats_baseline'
+interface PauseInterval { from: string; to: string | null }
+
+function loadPauses(): PauseInterval[] {
+  try { return JSON.parse(localStorage.getItem(PAUSE_KEY) ?? '[]') } catch { return [] }
+}
+
+function isInPause(answeredAt: string, pauses: PauseInterval[]): boolean {
+  const t = new Date(answeredAt).getTime()
+  return pauses.some(p => {
+    const from = new Date(p.from).getTime()
+    const to   = p.to ? new Date(p.to).getTime() : Date.now()
+    return t >= from && t <= to
+  })
+}
+
 interface DisciplineStat {
   discipline: Discipline
   subjects: Subject[]
@@ -47,6 +66,55 @@ export function Stats() {
   const { user } = useAuth()
 
   const [activeTab, setActiveTab] = useState<StatsTab>('geral')
+
+  // ── Estado de pausa da contagem diária/semanal
+  const [paused, setPaused] = useState(() => {
+    const ps = loadPauses()
+    return ps.length > 0 && ps[ps.length - 1].to === null
+  })
+
+  function togglePause() {
+    const ps = loadPauses()
+    if (!paused) {
+      ps.push({ from: new Date().toISOString(), to: null })
+    } else if (ps.length > 0 && ps[ps.length - 1].to === null) {
+      ps[ps.length - 1].to = new Date().toISOString()
+    }
+    localStorage.setItem(PAUSE_KEY, JSON.stringify(ps))
+    setPaused(v => !v)
+  }
+
+  // ── Reiniciar contagem (Hoje/Semana)
+  const [countResetTs, setCountResetTs] = useState(() => localStorage.getItem(COUNT_RESET_KEY) ?? '')
+  function handleCountReset() {
+    const ts = new Date().toISOString()
+    localStorage.setItem(COUNT_RESET_KEY, ts)
+    setCountResetTs(ts)
+  }
+
+  // ── Reinício geral (baseline global)
+  const [statsBaselineTs, setStatsBaselineTs] = useState(() => localStorage.getItem(STATS_BASE_KEY) ?? '')
+  function handleStatsBaseline() {
+    if (!window.confirm('Zerar o painel de estatísticas? Os dados reais são mantidos — apenas a visualização começa do zero agora.')) return
+    const ts = new Date().toISOString()
+    localStorage.setItem(STATS_BASE_KEY, ts)
+    setStatsBaselineTs(ts)
+  }
+
+  // ── Totais filtrados pelas pausas
+  const pauses = loadPauses()
+  const now = new Date()
+  const todayStart    = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const weekStart     = todayStart - 6 * 24 * 60 * 60 * 1000
+  const countResetTime = countResetTs ? new Date(countResetTs).getTime() : 0
+  const todayCount = answers.filter(a => {
+    const t = new Date(a.answeredAt).getTime()
+    return t >= todayStart && t >= countResetTime && !isInPause(a.answeredAt, pauses)
+  }).length
+  const weekCount = answers.filter(a => {
+    const t = new Date(a.answeredAt).getTime()
+    return t >= weekStart && t >= countResetTime && !isInPause(a.answeredAt, pauses)
+  }).length
   const [stats, setStats] = useState<DisciplineStat[]>([])
   const [simulados, setSimulados] = useState<SimuladoRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -115,16 +183,21 @@ export function Stats() {
   }
 
   // ── General stats
+  const baselineTime = statsBaselineTs ? new Date(statsBaselineTs).getTime() : 0
+  const effectiveAnswers = baselineTime > 0
+    ? answers.filter(a => new Date(a.answeredAt).getTime() >= baselineTime)
+    : answers
+
   const allQuestionIds = stats.flatMap(s => s.questions.map(q => q.id))
   const totalQuestions = allQuestionIds.length
-  const answered = answers.filter(a => allQuestionIds.includes(a.questionId)).length
-  const correct = answers.filter(a => allQuestionIds.includes(a.questionId) && a.isCorrect).length
+  const answered = effectiveAnswers.filter(a => allQuestionIds.includes(a.questionId)).length
+  const correct = effectiveAnswers.filter(a => allQuestionIds.includes(a.questionId) && a.isCorrect).length
   const wrong = answered - correct
   const notAnswered = totalQuestions - answered
   const percent = answered === 0 ? 0 : Math.round((correct / answered) * 100)
 
   function getAccuracy(questionIds: string[]) {
-    const ans = answers.filter(a => questionIds.includes(a.questionId))
+    const ans = effectiveAnswers.filter(a => questionIds.includes(a.questionId))
     if (ans.length === 0) return null
     return {
       correct: ans.filter(a => a.isCorrect).length,
@@ -197,6 +270,40 @@ export function Stats() {
         {/* ══ ABA: DESEMPENHO GERAL ══════════════════════════════════════════ */}
         {activeTab === 'geral' && (
           <>
+            {/* ── Bloco: Hoje & Semana */}
+            <div className="rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between gap-3 mb-3">
+              <div className="flex gap-6">
+                <div>
+                  <p className="text-xl font-bold text-primary">{todayCount}</p>
+                  <p className="text-xs text-muted-foreground">Hoje</p>
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-primary">{weekCount}</p>
+                  <p className="text-xs text-muted-foreground">Últimos 7 dias</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={handleCountReset}
+                  title="Reiniciar contagem de hoje e semana"
+                  className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Zerar
+                </button>
+                <button
+                  onClick={togglePause}
+                  title={paused ? 'Reativar contagem' : 'Pausar contagem'}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                    paused
+                      ? 'border-amber-400 bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {paused ? '▶ Reativar' : '⏸ Pausar'}
+                </button>
+              </div>
+            </div>
             {loading ? (
               <div className="flex justify-center py-12">
                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -323,6 +430,14 @@ export function Stats() {
                 <p className="text-center text-sm text-muted-foreground">
                   Clique em uma matéria para ver o desempenho por assunto.
                 </p>
+
+                {/* Reinício geral */}
+                <button
+                  onClick={handleStatsBaseline}
+                  className="w-full rounded-xl border border-dashed border-red-300 dark:border-red-900/50 px-4 py-2.5 text-xs font-medium text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                >
+                  Reinício geral das estatísticas
+                </button>
               </div>
             )}
           </>
