@@ -382,8 +382,14 @@ export function Admin() {
       for (const child of Array.from(parent.childNodes)) {
         if (child.nodeType !== Node.ELEMENT_NODE) continue
         const el = child as Element
-        if (BLOCK.has(el.tagName.toLowerCase())) result.push(el)
-        else result.push(...collectBlocks(el))
+        if (BLOCK.has(el.tagName.toLowerCase())) {
+          // Se contém blocos filhos é um container — desce; senão é folha — usa direto
+          const nested = collectBlocks(el)
+          if (nested.length > 0) result.push(...nested)
+          else result.push(el)
+        } else {
+          result.push(...collectBlocks(el))
+        }
       }
       return result
     }
