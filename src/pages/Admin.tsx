@@ -368,111 +368,74 @@ export function Admin() {
     if (matched.length > 0) setQForm(f => f ? { ...f, options: matched } : f)
   }
 
-  // Versão HTML do parser: preserva <b>, <i>, <u> durante a separação automática.
-  // Usada no onPaste do bloco de alternativas quando o clipboard contém HTML.
+  // Versão HTML do parser: normaliza via extractEmphasisFromHtml (igual aos outros campos)
+  // e depois roda a mesma lógica de linha do parser de texto puro.
   function applyAltPasteBlockFromHtml(html: string) {
     if (!qForm) return
 
-    const doc = new DOMParser().parseFromString(html, 'text/html')
+    // extractEmphasisFromHtml já resolve toda complexidade de estrutura DOM:
+    // blocos viram \n, só <b>/<i>/<u> sobrevivem — mesma função dos outros campos.
+    const formatted = extractEmphasisFromHtml(html)
 
-    // Coleta elementos de bloco não aninhados (cada um vira uma "linha")
-    const BLOCK = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th'])
-    function collectBlocks(parent: Element): Element[] {
-      const result: Element[] = []
-      for (const child of Array.from(parent.childNodes)) {
-        if (child.nodeType !== Node.ELEMENT_NODE) continue
-        const el = child as Element
-        if (BLOCK.has(el.tagName.toLowerCase())) {
-          // Se contém blocos filhos é um container — desce; senão é folha — usa direto
-          const nested = collectBlocks(el)
-          if (nested.length > 0) result.push(...nested)
-          else result.push(el)
-        } else {
-          result.push(...collectBlocks(el))
-        }
-      }
-      return result
-    }
+    console.log('[altPaste/html] formatted (primeiros 300):', formatted.slice(0, 300))
 
-    const blocks = collectBlocks(doc.body)
-    if (blocks.length === 0) {
-      // Sem estrutura de bloco — cai no parser de texto plano
-      applyAltPasteBlock(doc.body.textContent ?? '')
-      return
-    }
-
+    const lines = formatted.split('\n')
     const matched: { letter: string; text: string }[] = []
     let pendingLetter: string | null = null
-    let pendingHtml: string[] = []
+    let pendingLines: string[] = []
 
     function flushPending() {
-      if (pendingLetter && pendingHtml.length > 0) {
-        matched.push({
-          letter: pendingLetter,
-          text: extractEmphasisFromHtml(pendingHtml.join(' ')).trim(),
-        })
+      if (pendingLetter && pendingLines.length > 0) {
+        matched.push({ letter: pendingLetter, text: pendingLines.join(' ').trim() })
       }
       pendingLetter = null
-      pendingHtml = []
+      pendingLines = []
     }
 
-    // Remove o marcador "A) " / "A. " / "A " do primeiro nó de texto do clone
-    function stripLeadingMarker(el: Element) {
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-      const first = walker.nextNode()
-      if (first?.textContent) {
-        first.textContent = first.textContent.replace(/^[A-Ea-e](?:[.)]\s*|\s+)/, '')
-      }
-    }
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
 
-    for (const block of blocks) {
-      const plain = (block.textContent ?? '').trim()
-      if (!plain) continue
-
-      // Marcador embutido em bold/strong sem separador: <strong>A</strong><i>texto</i>
-      const firstEl = block.firstElementChild
-      if (firstEl && ['b', 'strong'].includes(firstEl.tagName.toLowerCase())) {
-        const markerText = (firstEl.textContent ?? '').trim()
-        if (/^[A-Ea-e][.)]{0,1}$/.test(markerText)) {
-          flushPending()
-          const clone = block.cloneNode(true) as Element
-          clone.firstElementChild!.remove()
-          matched.push({
-            letter: markerText[0].toUpperCase(),
-            text: extractEmphasisFromHtml(clone.innerHTML).trim(),
-          })
-          continue
-        }
-      }
-
-      // Formato inline: A) texto, A. texto, A texto, A)texto (sem espaço)
-      const inlineMatch = plain.match(/^([A-Ea-e])(?:[.)]\s*|\s+)(.+)/)
-      if (inlineMatch) {
+      // Marcador em tag de ênfase: <b>A)</b> texto  <b>A</b><i>texto</i>
+      const boldM = trimmed.match(/^<[biu]>([A-Ea-e])[.)]{0,1}<\/[biu]>\s*(.*)/)
+      if (boldM) {
+        console.log('[altPaste/html] linha → boldM', boldM[1], '|', trimmed.slice(0, 80))
         flushPending()
-        const clone = block.cloneNode(true) as Element
-        stripLeadingMarker(clone)
-        matched.push({
-          letter: inlineMatch[1].toUpperCase(),
-          text: extractEmphasisFromHtml(clone.innerHTML).trim(),
-        })
+        matched.push({ letter: boldM[1].toUpperCase(), text: boldM[2].trim() })
         continue
       }
 
-      // Formato com letra sozinha na linha
-      const letterOnly = plain.match(/^([A-Ea-e])$/)
-      if (letterOnly) {
+      // Marcador em texto puro: A) texto  A. texto  A texto
+      const plainM = trimmed.match(/^([A-Ea-e])(?:[.)]\s*|\s+)(.+)/)
+      if (plainM) {
+        console.log('[altPaste/html] linha → plainM', plainM[1], '|', trimmed.slice(0, 80))
         flushPending()
-        pendingLetter = letterOnly[1].toUpperCase()
+        matched.push({ letter: plainM[1].toUpperCase(), text: plainM[2].trim() })
         continue
       }
 
-      if (pendingLetter && plain) {
-        pendingHtml.push(block.outerHTML)
+      // Letra sozinha na linha
+      if (/^[A-Ea-e]$/.test(trimmed)) {
+        console.log('[altPaste/html] linha → letra sozinha', trimmed)
+        flushPending()
+        pendingLetter = trimmed.toUpperCase()
+        continue
       }
+
+      console.log('[altPaste/html] linha → não reconhecida:', trimmed.slice(0, 80))
+      if (pendingLetter) pendingLines.push(trimmed)
     }
     flushPending()
 
-    if (matched.length > 0) setQForm(f => f ? { ...f, options: matched } : f)
+    console.log('[altPaste/html] alternativas detectadas:', matched.length, matched.map(m => m.letter))
+    if (matched.length > 0) {
+      console.log('[altPaste/html] → setQForm chamado')
+      setQForm(f => f ? { ...f, options: matched } : f)
+    } else {
+      // Fallback: plain text extraído do HTML
+      console.log('[altPaste/html] → sem match, fallback plain')
+      applyAltPasteBlock(new DOMParser().parseFromString(html, 'text/html').body.textContent ?? '')
+    }
   }
 
   function renderQFormContent() {
@@ -577,11 +540,18 @@ export function Admin() {
                 className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
                 onPaste={e => {
                   e.preventDefault()
-                  const html = e.clipboardData.getData('text/html')
+                  const types = Array.from(e.clipboardData.types)
+                  const plain = e.clipboardData.getData('text/plain')
+                  const html  = e.clipboardData.getData('text/html')
+                  console.log('[altPaste] tipos:', types)
+                  console.log('[altPaste] text/plain tamanho:', plain.length, '| primeiros 120:', plain.slice(0, 120))
+                  console.log('[altPaste] text/html  tamanho:', html.length,  '| primeiros 120:', html.slice(0, 120))
                   if (html) {
+                    console.log('[altPaste] → caminho HTML')
                     applyAltPasteBlockFromHtml(html)
                   } else {
-                    applyAltPasteBlock(e.clipboardData.getData('text/plain'))
+                    console.log('[altPaste] → caminho plain')
+                    applyAltPasteBlock(plain)
                   }
                 }}
                 onChange={e => { if (e.target.value) applyAltPasteBlock(e.target.value) }}
