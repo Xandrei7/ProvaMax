@@ -210,7 +210,7 @@ export function Flashcards() {
   const criticalCount = (() => {
     try {
       const crits = new Set<string>(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]'))
-      return eliteCards.filter(c => crits.has(c.question_id) && c.status !== 'mastered').length
+      return eliteCards.filter(c => crits.has(c.question_id)).length
     } catch { return 0 }
   })()
 
@@ -281,7 +281,7 @@ export function Flashcards() {
     if (mode === 'critical') {
       const crits = getCriticalIds()
       const base = discId !== 'all' ? flashcards.filter(c => c.discipline_id === discId) : flashcards
-      queue = base.filter(c => crits.has(c.question_id) && c.status !== 'mastered')
+      queue = base.filter(c => crits.has(c.question_id))
     } else {
       queue = buildEliteQueue(flashcards, mode, discId)
     }
@@ -307,6 +307,14 @@ export function Flashcards() {
       const updated = await reviewFlashcard(card.id, action, user.id)
       if (updated) {
         setFlashcards(prev => prev.map(item => (item.id === updated.id ? updated : item)))
+      }
+      // Só sai de Críticos quando o usuário clica explicitamente em "Dominado"
+      if (action === 'mastered') {
+        try {
+          const crits = getCriticalIds()
+          crits.delete(card.question_id)
+          localStorage.setItem('provamax_critical_qids', JSON.stringify([...crits]))
+        } catch {}
       }
       setShowAnswer(false)
       if (action === 'wrong') {

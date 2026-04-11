@@ -220,7 +220,7 @@ export function Simulado() {
     // Update critical set in localStorage
     try {
       const crits = new Set<string>(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]'))
-      if (confidence !== null) { crits.add(q.id) } else if (newAnswer.isCorrect) { crits.delete(q.id) }
+      if (confidence !== null) { crits.add(q.id) }
       localStorage.setItem('provamax_critical_qids', JSON.stringify([...crits]))
     } catch {}
     setSelected(null)

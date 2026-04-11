@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { extractEmphasisFromHtml } from '@/lib/richText'
 import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Header } from '@/components/Header'
@@ -34,11 +35,14 @@ export function Admin() {
   const [qSort, setQSort] = useState<'recent' | 'discipline' | 'subject' | 'order'>('recent')
   const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set())
   const [pendingOrder, setPendingOrder] = useState<Map<string, number> | null>(null)
+  const [showInlineSub, setShowInlineSub] = useState(false)
+  const [inlineSubName, setInlineSubName] = useState('')
 
   const [qForm, setQForm] = useState<{
     id?: string; discipline_id: string; subject_id: string;
     type: QuestionType; statement: string; options: {letter:string;text:string}[];
     correct_answer: string; comment: string; legal_basis: string; exam_tips: string; sort_order: string;
+    associated_text: string;
   } | null>(null)
 
   function formatDateTime(value?: string | null) {
@@ -107,7 +111,7 @@ export function Admin() {
 
   // ── Questions ──────────────────────────────────────────────────────────────
   function newQForm(): typeof qForm {
-    return { discipline_id: '', subject_id: '', type: 'true_false', statement: '', options: [{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}], correct_answer: 'C', comment: '', legal_basis: '', exam_tips: '', sort_order: '0' }
+    return { discipline_id: qFilterDisc, subject_id: qFilterSubject, type: 'multiple_choice', statement: '', options: [{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}], correct_answer: 'A', comment: '', legal_basis: '', exam_tips: '', sort_order: '0', associated_text: '' }
   }
 
   function addOption() {
@@ -127,9 +131,10 @@ export function Admin() {
         legal_basis: qForm.legal_basis || null, exam_tips: qForm.exam_tips || null,
         subject_id: qForm.subject_id, discipline_id: qForm.discipline_id,
         sort_order: Number(qForm.sort_order) || 0,
+        associated_text: qForm.associated_text || null,
       })
       toast.success(qForm.id ? 'Questão atualizada!' : 'Questão criada!')
-      setQForm(null); await loadAll()
+      setQForm(null); setShowInlineSub(false); setInlineSubName(''); await loadAll()
     } catch { toast.error('Erro ao salvar questão.') }
   }
 
@@ -303,6 +308,218 @@ export function Admin() {
     document.body.removeChild(el)
   }
 
+  async function handleCreateInlineSub() {
+    if (!inlineSubName.trim() || !qForm?.discipline_id) return toast.error('Selecione a matéria e digite o nome do assunto')
+    try {
+      await saveSubject({ name: inlineSubName.trim(), discipline_id: qForm.discipline_id, sort_order: 0 })
+      const updated = await getSubjects()
+      setSubjects(updated)
+      const created = updated.find(s => s.name === inlineSubName.trim() && s.discipline_id === qForm.discipline_id)
+      if (created) setQForm(f => f ? { ...f, subject_id: created.id } : f)
+      setInlineSubName('')
+      setShowInlineSub(false)
+      toast.success('Assunto criado e selecionado!')
+    } catch { toast.error('Erro ao criar assunto.') }
+  }
+
+  function applyAltPasteBlock(text: string) {
+    if (!qForm) return
+    const lines = text.split('\n')
+    const matched: { letter: string; text: string }[] = []
+
+    // Estado para o formato "letra sozinha na linha"
+    let pendingLetter: string | null = null
+    let pendingLines: string[] = []
+
+    function flushPending() {
+      if (pendingLetter && pendingLines.length > 0) {
+        matched.push({ letter: pendingLetter, text: pendingLines.join(' ').trim() })
+      }
+      pendingLetter = null
+      pendingLines = []
+    }
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+
+      // Formato inline: A) texto  ou  A. texto  ou  a) texto
+      const inlineMatch = trimmed.match(/^([A-Ea-e])[.)]\s+(.+)/)
+      if (inlineMatch) {
+        flushPending()
+        matched.push({ letter: inlineMatch[1].toUpperCase(), text: inlineMatch[2].trim() })
+        continue
+      }
+
+      // Formato com letra sozinha na linha
+      const letterOnly = trimmed.match(/^([A-Ea-e])$/)
+      if (letterOnly) {
+        flushPending()
+        pendingLetter = letterOnly[1].toUpperCase()
+        continue
+      }
+
+      // Linha de conteúdo pertencente à letra pendente
+      if (pendingLetter && trimmed) {
+        pendingLines.push(trimmed)
+      }
+    }
+    flushPending()
+
+    if (matched.length > 0) setQForm(f => f ? { ...f, options: matched } : f)
+  }
+
+  function renderQFormContent() {
+    if (!qForm) return null
+    return (
+      <>
+        <select value={qForm.discipline_id} onChange={e => setQForm({...qForm, discipline_id: e.target.value, subject_id: ''})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+          <option value="">Selecione a matéria *</option>
+          {disciplines.map(d => <option key={d.id} value={d.id}>{d.icon} {d.name}</option>)}
+        </select>
+        <div className="flex flex-col gap-1.5">
+          <select
+            value={showInlineSub ? '__new__' : qForm.subject_id}
+            onChange={e => {
+              if (e.target.value === '__new__') { setShowInlineSub(true) }
+              else { setShowInlineSub(false); setQForm({...qForm, subject_id: e.target.value}) }
+            }}
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            <option value="">Selecione o assunto *</option>
+            {subjects.filter(s => s.discipline_id === qForm.discipline_id).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="__new__">+ Novo assunto</option>
+          </select>
+          {showInlineSub && (
+            <div className="flex gap-2 items-center">
+              <input
+                autoFocus
+                value={inlineSubName}
+                onChange={e => setInlineSubName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleCreateInlineSub() } }}
+                placeholder="Nome do novo assunto"
+                className="flex-1 rounded-md border border-primary bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+              <button onClick={() => void handleCreateInlineSub()} className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 shrink-0">Criar</button>
+              <button onClick={() => { setShowInlineSub(false); setInlineSubName('') }} className="text-sm text-muted-foreground hover:text-foreground shrink-0">✕</button>
+            </div>
+          )}
+        </div>
+        <select value={qForm.type} onChange={e => setQForm({...qForm, type: e.target.value as QuestionType, correct_answer: e.target.value === 'true_false' ? 'C' : 'A'})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+          <option value="true_false">Certo / Errado</option>
+          <option value="multiple_choice">Múltipla Escolha</option>
+        </select>
+        <textarea
+          value={qForm.associated_text}
+          onChange={e => setQForm({...qForm, associated_text: e.target.value})}
+          onPaste={e => {
+            const html = e.clipboardData.getData('text/html')
+            if (!html) return
+            e.preventDefault()
+            setQForm(f => f ? {...f, associated_text: extractEmphasisFromHtml(html)} : f)
+          }}
+          placeholder="Texto associado (opcional)"
+          rows={3}
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <textarea
+          value={qForm.statement}
+          onChange={e => setQForm({...qForm, statement: e.target.value})}
+          onPaste={e => {
+            const html = e.clipboardData.getData('text/html')
+            if (!html) return
+            e.preventDefault()
+            setQForm(f => f ? {...f, statement: extractEmphasisFromHtml(html)} : f)
+          }}
+          placeholder="Enunciado *"
+          rows={3}
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        {qForm.type === 'multiple_choice' && (
+          <div className="flex flex-col gap-2">
+            <p className="text-sm font-medium">Alternativas</p>
+            {qForm.options.map((opt, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="font-bold text-sm w-5">{opt.letter}.</span>
+                <input
+                  value={opt.text}
+                  onChange={e => {
+                    const opts = [...qForm.options]; opts[i] = {...opts[i], text: e.target.value}
+                    setQForm({...qForm, options: opts})
+                  }}
+                  onPaste={e => {
+                    const html = e.clipboardData.getData('text/html')
+                    if (!html) return
+                    e.preventDefault()
+                    const text = extractEmphasisFromHtml(html)
+                    const opts = [...qForm.options]; opts[i] = {...opts[i], text}
+                    setQForm({...qForm, options: opts})
+                  }}
+                  placeholder={`Alternativa ${opt.letter}`}
+                  className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+            ))}
+            {qForm.options.length < 5 && (
+              <button onClick={addOption} className="text-sm text-primary hover:underline self-start">+ Adicionar alternativa</button>
+            )}
+            <div className="flex flex-col gap-1 mt-1 pt-2 border-t border-dashed border-border">
+              <p className="text-xs text-muted-foreground">Colar bloco de alternativas (preenche A–E automaticamente)</p>
+              <textarea
+                placeholder={"A) alternativa\nB) alternativa\nC) alternativa"}
+                rows={3}
+                className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                onPaste={e => {
+                  e.preventDefault()
+                  applyAltPasteBlock(e.clipboardData.getData('text/plain'))
+                }}
+                onChange={e => { if (e.target.value) applyAltPasteBlock(e.target.value) }}
+              />
+            </div>
+          </div>
+        )}
+        <div>
+          <p className="text-sm font-medium mb-1">Resposta correta *</p>
+          {qForm.type === 'true_false' ? (
+            <div className="flex gap-2">
+              {['C','E'].map(v => (
+                <button key={v} onClick={() => setQForm({...qForm, correct_answer: v})} className={cn('rounded-md px-4 py-2 text-sm font-medium border transition-colors', qForm.correct_answer === v ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary')}>
+                  {v === 'C' ? 'Certo' : 'Errado'}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {qForm.options.map(opt => (
+                <button key={opt.letter} onClick={() => setQForm({...qForm, correct_answer: opt.letter})} className={cn('rounded-md px-3 py-1.5 text-sm font-medium border transition-colors', qForm.correct_answer === opt.letter ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary')}>
+                  {opt.letter}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <textarea
+          value={qForm.comment}
+          onChange={e => setQForm({...qForm, comment: e.target.value})}
+          onPaste={e => {
+            const html = e.clipboardData.getData('text/html')
+            if (!html) return
+            e.preventDefault()
+            setQForm(f => f ? {...f, comment: extractEmphasisFromHtml(html, true)} : f)
+          }}
+          placeholder="Comentário / explicação *"
+          rows={3}
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input value={qForm.legal_basis} onChange={e => setQForm({...qForm, legal_basis: e.target.value})} placeholder="Fundamento Legal (opcional)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+        <input value={qForm.exam_tips} onChange={e => setQForm({...qForm, exam_tips: e.target.value})} placeholder="Dica de prova (opcional)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+        <div className="flex gap-2">
+          <button onClick={handleSaveQ} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">Salvar</button>
+          <button onClick={() => { setQForm(null); setShowInlineSub(false); setInlineSubName('') }} className="text-sm text-muted-foreground hover:text-foreground">Cancelar</button>
+        </div>
+      </>
+    )
+  }
+
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'disciplines', label: 'Matérias', icon: <BookOpen size={16}/> },
     { id: 'subjects', label: 'Assuntos', icon: <FileText size={16}/> },
@@ -426,7 +643,7 @@ export function Admin() {
             {/* Header */}
             <div className="flex justify-between items-center">
               <h2 className="font-semibold">Questões ({questions.length})</h2>
-              <button onClick={() => setQForm(newQForm())} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              <button onClick={() => { setQForm(newQForm()); setShowInlineSub(false); setInlineSubName('') }} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
                 <Plus size={14}/>Nova Questão
               </button>
             </div>
@@ -481,67 +698,11 @@ export function Admin() {
               </div>
             </div>
 
-            {/* Question form (edit / new) */}
-            {qForm && (
-              <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
-                <h3 className="font-medium">{qForm.id ? 'Editar' : 'Nova'} Questão</h3>
-                <select value={qForm.discipline_id} onChange={e => setQForm({...qForm, discipline_id:e.target.value, subject_id:''})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
-                  <option value="">Selecione a matéria *</option>
-                  {disciplines.map(d => <option key={d.id} value={d.id}>{d.icon} {d.name}</option>)}
-                </select>
-                <select value={qForm.subject_id} onChange={e => setQForm({...qForm, subject_id:e.target.value})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
-                  <option value="">Selecione o assunto *</option>
-                  {subjects.filter(s => s.discipline_id === qForm.discipline_id).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-                <select value={qForm.type} onChange={e => setQForm({...qForm, type:e.target.value as QuestionType, correct_answer: e.target.value==='true_false'?'C':'A'})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
-                  <option value="true_false">Certo / Errado</option>
-                  <option value="multiple_choice">Múltipla Escolha</option>
-                </select>
-                <textarea value={qForm.statement} onChange={e => setQForm({...qForm, statement:e.target.value})} placeholder="Enunciado *" rows={3} className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"/>
-                {qForm.type === 'multiple_choice' && (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm font-medium">Alternativas</p>
-                    {qForm.options.map((opt, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <span className="font-bold text-sm w-5">{opt.letter}.</span>
-                        <input value={opt.text} onChange={e => {
-                          const opts = [...qForm.options]; opts[i] = {...opts[i], text: e.target.value}
-                          setQForm({...qForm, options: opts})
-                        }} placeholder={`Alternativa ${opt.letter}`} className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
-                      </div>
-                    ))}
-                    {qForm.options.length < 5 && (
-                      <button onClick={addOption} className="text-sm text-primary hover:underline self-start">+ Adicionar alternativa</button>
-                    )}
-                  </div>
-                )}
-                <div>
-                  <p className="text-sm font-medium mb-1">Resposta correta *</p>
-                  {qForm.type === 'true_false' ? (
-                    <div className="flex gap-2">
-                      {['C','E'].map(v => (
-                        <button key={v} onClick={() => setQForm({...qForm, correct_answer:v})} className={cn('rounded-md px-4 py-2 text-sm font-medium border transition-colors', qForm.correct_answer===v ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary')}>
-                          {v === 'C' ? 'Certo' : 'Errado'}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {qForm.options.map(opt => (
-                        <button key={opt.letter} onClick={() => setQForm({...qForm, correct_answer:opt.letter})} className={cn('rounded-md px-3 py-1.5 text-sm font-medium border transition-colors', qForm.correct_answer===opt.letter ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary')}>
-                          {opt.letter}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <textarea value={qForm.comment} onChange={e => setQForm({...qForm, comment:e.target.value})} placeholder="Comentário / explicação *" rows={3} className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"/>
-                <input value={qForm.legal_basis} onChange={e => setQForm({...qForm, legal_basis:e.target.value})} placeholder="Fundamento Legal (opcional)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
-                <input value={qForm.exam_tips} onChange={e => setQForm({...qForm, exam_tips:e.target.value})} placeholder="Dica de prova (opcional)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
-                <div className="flex gap-2">
-                  <button onClick={handleSaveQ} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">Salvar</button>
-                  <button onClick={() => setQForm(null)} className="text-sm text-muted-foreground hover:text-foreground">Cancelar</button>
-                </div>
+            {/* Question form — Nova Questão apenas (sem id) */}
+            {qForm && !qForm.id && (
+              <div className="rounded-xl border border-primary bg-card p-4 flex flex-col gap-3">
+                <h3 className="font-medium">Nova Questão</h3>
+                {renderQFormContent()}
               </div>
             )}
 
@@ -590,11 +751,22 @@ export function Admin() {
               <p className="text-center text-muted-foreground py-8 text-sm">Nenhuma questão encontrada.</p>
             )}
 
-            {/* Question list */}
+            {/* Question list — com edição inline */}
             <div className="flex flex-col gap-2">
               {filteredQuestions.map(q => {
                 const sub = subjects.find(s => s.id === q.subject_id)
                 const disc = disciplines.find(d => d.id === q.discipline_id)
+
+                // Edição inline: substitui o card pelo formulário
+                if (qForm?.id === q.id) {
+                  return (
+                    <div key={q.id} className="rounded-xl border border-primary bg-card p-4 flex flex-col gap-3">
+                      <h3 className="font-medium">Editar Questão</h3>
+                      {renderQFormContent()}
+                    </div>
+                  )
+                }
+
                 return (
                   <div key={q.id} className={cn('rounded-xl border bg-card p-3 transition-colors', selectedQIds.has(q.id) ? 'border-primary/50 bg-primary/5' : 'border-border')}>
                     <div className="flex items-start gap-2">
@@ -625,12 +797,16 @@ export function Admin() {
                             ><ChevronDown size={14}/></button>
                           </>
                         )}
-                        <button onClick={() => setQForm({
-                          id:q.id, discipline_id:q.discipline_id, subject_id:q.subject_id,
-                          type:q.type, statement:q.statement, options:q.options??[{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}],
-                          correct_answer:q.correct_answer, comment:q.comment,
-                          legal_basis:q.legal_basis??'', exam_tips:q.exam_tips??'', sort_order:String(q.sort_order)
-                        })} className="p-1 text-muted-foreground hover:text-foreground"><Pencil size={14}/></button>
+                        <button onClick={() => {
+                          setShowInlineSub(false); setInlineSubName('')
+                          setQForm({
+                            id: q.id, discipline_id: q.discipline_id, subject_id: q.subject_id,
+                            type: q.type, statement: q.statement, options: q.options ?? [{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}],
+                            correct_answer: q.correct_answer, comment: q.comment,
+                            legal_basis: q.legal_basis ?? '', exam_tips: q.exam_tips ?? '', sort_order: String(q.sort_order),
+                            associated_text: q.associated_text ?? ''
+                          })
+                        }} className="p-1 text-muted-foreground hover:text-foreground"><Pencil size={14}/></button>
                         <button onClick={() => handleDeleteQ(q.id)} className="p-1 text-muted-foreground hover:text-red-500"><Trash2 size={14}/></button>
                       </div>
                     </div>

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
+import provamaxIcon from '@/assets/provamax-icon.png'
 
 export function Login() {
   const { signIn } = useAuth()
@@ -27,9 +28,20 @@ export function Login() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold">Prova Max</h1>
-          <p className="text-muted-foreground mt-1">Questões Inéditas para concurso da ALE-RR</p>
+        <div className="mb-8 flex flex-col items-center gap-4">
+          <div className="flex items-center gap-3">
+            <img
+              src={provamaxIcon}
+              alt="ProvaMax"
+              className="h-12 w-12 rounded-xl object-contain shrink-0"
+            />
+            <div className="text-left">
+              <h1 className="text-2xl font-bold leading-tight">ProvaMax</h1>
+              <p className="text-sm text-muted-foreground leading-tight">
+                Questões Inéditas para concurso da ALE-RR
+              </p>
+            </div>
+          </div>
         </div>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>

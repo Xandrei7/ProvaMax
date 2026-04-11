@@ -1,0 +1,167 @@
+[1mdiff --git a/src/pages/Stats.tsx b/src/pages/Stats.tsx[m
+[1mindex 6ae0728..9d44633 100644[m
+[1m--- a/src/pages/Stats.tsx[m
+[1m+++ b/src/pages/Stats.tsx[m
+[36m@@ -12,6 +12,25 @@[m [mimport type { Discipline, Subject, Question, SimuladoRecord } from '@/types'[m
+ [m
+ type StatsTab = 'geral' | 'simulados'[m
+ [m
+[32m+[m[32m// ── Contagem diária/semanal com suporte a pausas ────────────────────────────[m
+[32m+[m[32mconst PAUSE_KEY        = 'provamax_count_pauses'[m
+[32m+[m[32mconst COUNT_RESET_KEY  = 'provamax_count_reset'[m
+[32m+[m[32mconst STATS_BASE_KEY   = 'provamax_stats_baseline'[m
+[32m+[m[32minterface PauseInterval { from: string; to: string | null }[m
+[32m+[m
+[32m+[m[32mfunction loadPauses(): PauseInterval[] {[m
+[32m+[m[32m  try { return JSON.parse(localStorage.getItem(PAUSE_KEY) ?? '[]') } catch { return [] }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mfunction isInPause(answeredAt: string, pauses: PauseInterval[]): boolean {[m
+[32m+[m[32m  const t = new Date(answeredAt).getTime()[m
+[32m+[m[32m  return pauses.some(p => {[m
+[32m+[m[32m    const from = new Date(p.from).getTime()[m
+[32m+[m[32m    const to   = p.to ? new Date(p.to).getTime() : Date.now()[m
+[32m+[m[32m    return t >= from && t <= to[m
+[32m+[m[32m  })[m
+[32m+[m[32m}[m
+[32m+[m
+ interface DisciplineStat {[m
+   discipline: Discipline[m
+   subjects: Subject[][m
+[36m@@ -47,6 +66,55 @@[m [mexport function Stats() {[m
+   const { user } = useAuth()[m
+ [m
+   const [activeTab, setActiveTab] = useState<StatsTab>('geral')[m
+[32m+[m
+[32m+[m[32m  // ── Estado de pausa da contagem diária/semanal[m
+[32m+[m[32m  const [paused, setPaused] = useState(() => {[m
+[32m+[m[32m    const ps = loadPauses()[m
+[32m+[m[32m    return ps.length > 0 && ps[ps.length - 1].to === null[m
+[32m+[m[32m  })[m
+[32m+[m
+[32m+[m[32m  function togglePause() {[m
+[32m+[m[32m    const ps = loadPauses()[m
+[32m+[m[32m    if (!paused) {[m
+[32m+[m[32m      ps.push({ from: new Date().toISOString(), to: null })[m
+[32m+[m[32m    } else if (ps.length > 0 && ps[ps.length - 1].to === null) {[m
+[32m+[m[32m      ps[ps.length - 1].to = new Date().toISOString()[m
+[32m+[m[32m    }[m
+[32m+[m[32m    localStorage.setItem(PAUSE_KEY, JSON.stringify(ps))[m
+[32m+[m[32m    setPaused(v => !v)[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // ── Reiniciar contagem (Hoje/Semana)[m
+[32m+[m[32m  const [countResetTs, setCountResetTs] = useState(() => localStorage.getItem(COUNT_RESET_KEY) ?? '')[m
+[32m+[m[32m  function handleCountReset() {[m
+[32m+[m[32m    const ts = new Date().toISOString()[m
+[32m+[m[32m    localStorage.setItem(COUNT_RESET_KEY, ts)[m
+[32m+[m[32m    setCountResetTs(ts)[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // ── Reinício geral (baseline global)[m
+[32m+[m[32m  const [statsBaselineTs, setStatsBaselineTs] = useState(() => localStorage.getItem(STATS_BASE_KEY) ?? '')[m
+[32m+[m[32m  function handleStatsBaseline() {[m
+[32m+[m[32m    if (!window.confirm('Zerar o painel de estatísticas? Os dados reais são mantidos — apenas a visualização começa do zero agora.')) return[m
+[32m+[m[32m    const ts = new Date().toISOString()[m
+[32m+[m[32m    localStorage.setItem(STATS_BASE_KEY, ts)[m
+[32m+[m[32m    setStatsBaselineTs(ts)[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // ── Totais filtrados pelas pausas[m
+[32m+[m[32m  const pauses = loadPauses()[m
+[32m+[m[32m  const now = new Date()[m
+[32m+[m[32m  const todayStart    = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()[m
+[32m+[m[32m  const weekStart     = todayStart - 6 * 24 * 60 * 60 * 1000[m
+[32m+[m[32m  const countResetTime = countResetTs ? new Date(countResetTs).getTime() : 0[m
+[32m+[m[32m  const todayCount = answers.filter(a => {[m
+[32m+[m[32m    const t = new Date(a.answeredAt).getTime()[m
+[32m+[m[32m    return t >= todayStart && t >= countResetTime && !isInPause(a.answeredAt, pauses)[m
+[32m+[m[32m  }).length[m
+[32m+[m[32m  const weekCount = answers.filter(a => {[m
+[32m+[m[32m    const t = new Date(a.answeredAt).getTime()[m
+[32m+[m[32m    return t >= weekStart && t >= countResetTime && !isInPause(a.answeredAt, pauses)[m
+[32m+[m[32m  }).length[m
+   const [stats, setStats] = useState<DisciplineStat[]>([])[m
+   const [simulados, setSimulados] = useState<SimuladoRecord[]>([])[m
+   const [loading, setLoading] = useState(true)[m
+[36m@@ -115,16 +183,21 @@[m [mexport function Stats() {[m
+   }[m
+ [m
+   // ── General stats[m
+[32m+[m[32m  const baselineTime = statsBaselineTs ? new Date(statsBaselineTs).getTime() : 0[m
+[32m+[m[32m  const effectiveAnswers = baselineTime > 0[m
+[32m+[m[32m    ? answers.filter(a => new Date(a.answeredAt).getTime() >= baselineTime)[m
+[32m+[m[32m    : answers[m
+[32m+[m
+   const allQuestionIds = stats.flatMap(s => s.questions.map(q => q.id))[m
+   const totalQuestions = allQuestionIds.length[m
+[31m-  const answered = answers.filter(a => allQuestionIds.includes(a.questionId)).length[m
+[31m-  const correct = answers.filter(a => allQuestionIds.includes(a.questionId) && a.isCorrect).length[m
+[32m+[m[32m  const answered = effectiveAnswers.filter(a => allQuestionIds.includes(a.questionId)).length[m
+[32m+[m[32m  const correct = effectiveAnswers.filter(a => allQuestionIds.includes(a.questionId) && a.isCorrect).length[m
+   const wrong = answered - correct[m
+   const notAnswered = totalQuestions - answered[m
+   const percent = answered === 0 ? 0 : Math.round((correct / answered) * 100)[m
+ [m
+   function getAccuracy(questionIds: string[]) {[m
+[31m-    const ans = answers.filter(a => questionIds.includes(a.questionId))[m
+[32m+[m[32m    const ans = effectiveAnswers.filter(a => questionIds.includes(a.questionId))[m
+     if (ans.length === 0) return null[m
+     return {[m
+       correct: ans.filter(a => a.isCorrect).length,[m
+[36m@@ -197,6 +270,40 @@[m [mexport function Stats() {[m
+         {/* ══ ABA: DESEMPENHO GERAL ══════════════════════════════════════════ */}[m
+         {activeTab === 'geral' && ([m
+           <>[m
+[32m+[m[32m            {/* ── Bloco: Hoje & Semana */}[m
+[32m+[m[32m            <div className="rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between gap-3 mb-3">[m
+[32m+[m[32m              <div className="flex gap-6">[m
+[32m+[m[32m                <div>[m
+[32m+[m[32m                  <p className="text-xl font-bold text-primary">{todayCount}</p>[m
+[32m+[m[32m                  <p className="text-xs text-muted-foreground">Hoje</p>[m
+[32m+[m[32m                </div>[m
+[32m+[m[32m                <div>[m
+[32m+[m[32m                  <p className="text-xl font-bold text-primary">{weekCount}</p>[m
+[32m+[m[32m                  <p className="text-xs text-muted-foreground">Últimos 7 dias</p>[m
+[32m+[m[32m                </div>[m
+[32m+[m[32m              </div>[m
+[32m+[m[32m              <div className="flex items-center gap-1.5 shrink-0">[m
+[32m+[m[32m                <button[m
+[32m+[m[32m                  onClick={handleCountReset}[m
+[32m+[m[32m                  title="Reiniciar contagem de hoje e semana"[m
+[32m+[m[32m                  className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"[m
+[32m+[m[32m                >[m
+[32m+[m[32m                  Zerar[m
+[32m+[m[32m                </button>[m
+[32m+[m[32m                <button[m
+[32m+[m[32m                  onClick={togglePause}[m
+[32m+[m[32m                  title={paused ? 'Reativar contagem' : 'Pausar contagem'}[m
+[32m+[m[32m                  className={cn([m
+[32m+[m[32m                    'rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',[m
+[32m+[m[32m                    paused[m
+[32m+[m[32m                      ? 'border-amber-400 bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400'[m
+[32m+[m[32m                      : 'border-border text-muted-foreground hover:text-foreground'[m
+[32m+[m[32m                  )}[m
+[32m+[m[32m                >[m
+[32m+[m[32m                  {paused ? '▶ Reativar' : '⏸ Pausar'}[m
+[32m+[m[32m                </button>[m
+[32m+[m[32m              </div>[m
+[32m+[m[32m            </div>[m
+             {loading ? ([m
+               <div className="flex justify-center py-12">[m
+                 <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />[m
+[36m@@ -323,6 +430,14 @@[m [mexport function Stats() {[m
+                 <p className="text-center text-sm text-muted-foreground">[m
+                   Clique em uma matéria para ver o desempenho por assunto.[m
+                 </p>[m
+[32m+[m
+[32m+[m[32m                {/* Reinício geral */}[m
+[32m+[m[32m                <button[m
+[32m+[m[32m                  onClick={handleStatsBaseline}[m
+[32m+[m[32m                  className="w-full rounded-xl border border-dashed border-red-300 dark:border-red-900/50 px-4 py-2.5 text-xs font-medium text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"[m
+[32m+[m[32m                >[m
+[32m+[m[32m                  Reinício geral das estatísticas[m
+[32m+[m[32m                </button>[m
+               </div>[m
+             )}[m
+           </>[m

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Upload, CheckCircle2, XCircle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { parseQuestionsText, type ParsedQuestion } from '@/lib/parser'
+import { extractEmphasisFromHtml } from '@/lib/richText'
 import { getDisciplines, getSubjects } from '@/lib/dataService'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
@@ -102,6 +103,7 @@ export function Import() {
         comment: q.comment || '',
         legal_basis: null,
         exam_tips: null,
+        associated_text: q.associatedText ?? null,
         subject_id: subId,
         discipline_id: discId,
         sort_order: i + 1,
@@ -118,6 +120,14 @@ export function Import() {
     } finally {
       setSaving(false)
     }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const html = e.clipboardData.getData('text/html')
+    if (!html) return // sem HTML → deixa o paste padrão acontecer
+    e.preventDefault()
+    const sanitized = extractEmphasisFromHtml(html)
+    setRawText(prev => prev + sanitized)
   }
 
   function reset() {
@@ -172,6 +182,7 @@ export function Import() {
               <textarea
                 value={rawText}
                 onChange={e => setRawText(e.target.value)}
+                onPaste={handlePaste}
                 rows={16}
                 placeholder={`1.\n\nEnunciado da primeira questão...\n\na) alternativa A\nb) alternativa B\nc) alternativa C\nd) alternativa D\ne) alternativa E\n\n2.\n\nEnunciado da segunda questão...\n\na) ...\n\nGABARITO COMENTADO\n1. C\n\nComentário explicando a resposta...\n\n2. A\n\nComentário explicando a resposta...`}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary"
@@ -216,8 +227,12 @@ export function Import() {
                       {q.type === 'true_false' ? 'C/E' : 'MC'}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm line-clamp-2">{q.statement || <span className="text-red-500 italic">⚠ Enunciado não detectado</span>}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      {q.statement ? (
+                        <p className="text-sm line-clamp-2" dangerouslySetInnerHTML={{ __html: q.statement }} />
+                      ) : (
+                        <p className="text-sm line-clamp-2 text-red-500 italic">⚠ Enunciado não detectado</p>
+                      )}
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
                         {q.correctAnswer ? (
                           <span className="flex items-center gap-1 text-xs text-green-600">
                             <CheckCircle2 size={12} /> Gabarito: {q.correctAnswer}
@@ -230,6 +245,9 @@ export function Import() {
                         {q.comment && (
                           <span className="text-xs text-muted-foreground">· Com comentário</span>
                         )}
+                        {q.associatedText && (
+                          <span className="text-xs text-blue-600 font-medium">· Texto associado</span>
+                        )}
                       </div>
                     </div>
                     {expandedIdx === i ? <ChevronUp size={14} className="shrink-0 mt-1 text-muted-foreground" /> : <ChevronDown size={14} className="shrink-0 mt-1 text-muted-foreground" />}
@@ -237,9 +255,15 @@ export function Import() {
 
                   {expandedIdx === i && (
                     <div className="border-t border-border px-4 py-3 flex flex-col gap-3 text-sm">
+                      {q.associatedText && (
+                        <div>
+                          <p className="text-xs font-semibold text-blue-600 mb-1">TEXTO ASSOCIADO</p>
+                          <p className="text-muted-foreground leading-relaxed whitespace-pre-line" dangerouslySetInnerHTML={{ __html: q.associatedText ?? '' }} />
+                        </div>
+                      )}
                       <div>
                         <p className="text-xs font-semibold text-muted-foreground mb-1">ENUNCIADO</p>
-                        <p>{q.statement}</p>
+                        <p dangerouslySetInnerHTML={{ __html: q.statement }} />
                       </div>
                       {q.options && q.options.length > 0 && (
                         <div>
@@ -252,7 +276,8 @@ export function Import() {
                                   ? 'bg-green-50 text-green-700 font-medium dark:bg-green-950/30 dark:text-green-400'
                                   : 'bg-muted/50'
                               )}>
-                                <span className="font-bold mr-2">{opt.letter}.</span>{opt.text}
+                                <span className="font-bold mr-2">{opt.letter}.</span>
+                              <span dangerouslySetInnerHTML={{ __html: opt.text }} />
                                 {opt.letter === q.correctAnswer && ' ✓'}
                               </div>
                             ))}
@@ -262,7 +287,7 @@ export function Import() {
                       {q.comment && (
                         <div>
                           <p className="text-xs font-semibold text-muted-foreground mb-1">COMENTÁRIO</p>
-                          <p className="text-muted-foreground leading-relaxed">{q.comment}</p>
+                          <p className="text-muted-foreground leading-relaxed" dangerouslySetInnerHTML={{ __html: q.comment }} />
                         </div>
                       )}
                     </div>

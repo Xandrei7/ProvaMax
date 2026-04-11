@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node node_modules/typescript/bin/tsc -b)",
+      "Bash(npm run:*)",
+      "Bash(node node_modules/typescript/bin/tsc --project tsconfig.json --noEmit)",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit --allowJs --checkJs false api/generate-flashcard.ts api/generate-flashcards-from-errors.ts)",
+      "Bash(gh run:*)",
+      "Bash(node node_modules/typescript/bin/tsc -b --force)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); pkgs=['typescript','@types/react','@types/react-dom','react']; [print\\(f'{p}: {d[\\\\\"packages\\\\\"][\\\\\"node_modules/\\\\\"+p][\\\\\"version\\\\\"]}'\\) for p in pkgs]\")",
+      "Bash(node -e \"const f=require\\('./package-lock.json'\\); const pkgs=['typescript','@types/react','vite']; pkgs.forEach\\(p => console.log\\(p+':', f.packages['node_modules/'+p]?.version || 'n/a'\\)\\)\")",
+      "Bash(gh repo:*)",
+      "Read(//c/Users/gustavo/Desktop/meu-app-questoes/**)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vercel:*)",
+      "Bash(grep -E \"\\\\.tsx$\")",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(node node_modules/.bin/vite build)",
+      "Bash(node node_modules/vite/bin/vite.js build)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")",
+      "Bash(vercel --prod)",
+      "Bash(node node_modules/.bin/vercel --version)",
+      "Bash(node node_modules/vercel/dist/index.js --version)",
+      "Bash(npx --yes tsc --noEmit --project \"c:/Users/gustavo/Desktop/ProvaMax/tsconfig.json\")",
+      "Bash(node -e \"console.log\\('node ok'\\)\")",
+      "Bash(node ./node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(vercel --version)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(node -e \"console.log\\('node works'\\)\")",
+      "Bash(node_modules/.bin/vite build:*)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\gustavo\\Desktop\\meu-app-questoes\\src\\assets",
+      "C:\\Users\\gustavo\\Desktop\\ProvaMax\\landing\\src"
+    ]
+  }
+}

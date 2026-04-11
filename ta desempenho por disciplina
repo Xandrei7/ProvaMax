@@ -1,0 +1,112 @@
+[1mdiff --git a/src/pages/Stats.tsx b/src/pages/Stats.tsx[m
+[1mindex 9d44633..093fbfb 100644[m
+[1m--- a/src/pages/Stats.tsx[m
+[1m+++ b/src/pages/Stats.tsx[m
+[36m@@ -360,6 +360,107 @@[m [mexport function Stats() {[m
+                   </div>[m
+                 </div>[m
+ [m
+[32m+[m[32m                {/* ── Ranking visual por disciplina */}[m
+[32m+[m[32m                {(() => {[m
+[32m+[m[32m                  const ranking = stats[m
+[32m+[m[32m                    .map(({ discipline, questions }) => {[m
+[32m+[m[32m                      const acc = getAccuracy(questions.map(q => q.id))[m
+[32m+[m[32m                      return acc ? { discipline, acc } : null[m
+[32m+[m[32m                    })[m
+[32m+[m[32m                    .filter((x): x is { discipline: Discipline; acc: { correct: number; answered: number; percent: number } } => x !== null)[m
+[32m+[m[32m                    // Critério principal: % de acerto. Desempate: mais respondido primeiro (amostra mais representante).[m
+[32m+[m[32m                    .sort((a, b) =>[m
+[32m+[m[32m                      a.acc.percent !== b.acc.percent[m
+[32m+[m[32m                        ? a.acc.percent - b.acc.percent[m
+[32m+[m[32m                        : b.acc.answered - a.acc.answered[m
+[32m+[m[32m                    )[m
+[32m+[m
+[32m+[m[32m                  const MIN_SAMPLE = 10[m
+[32m+[m[32m                  const reliable  = ranking.filter(r => r.acc.answered >= MIN_SAMPLE)[m
+[32m+[m[32m                  const lowSample = ranking.filter(r => r.acc.answered > 0 && r.acc.answered < MIN_SAMPLE)[m
+[32m+[m
+[32m+[m[32m                  if (ranking.length < 2) return null[m
+[32m+[m[32m                  const best  = reliable.length > 0 ? reliable[reliable.length - 1] : null[m
+[32m+[m[32m                  const worst = reliable.length > 0 ? reliable[0] : null[m
+[32m+[m
+[32m+[m[32m                  return ([m
+[32m+[m[32m                    <div>[m
+[32m+[m[32m                      <div className="flex items-center justify-between mb-2">[m
+[32m+[m[32m                        <h2 className="font-semibold">Desempenho por disciplina</h2>[m
+[32m+[m[32m                        <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground">[m
+[32m+[m[32m                          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />≥70%</span>[m
+[32m+[m[32m                          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-400 shrink-0" />50–69%</span>[m
+[32m+[m[32m                          <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />&lt;50%</span>[m
+[32m+[m[32m                        </div>[m
+[32m+[m[32m                      </div>[m
+[32m+[m
+[32m+[m[32m                      {best && worst ? ([m
+[32m+[m[32m                        <div className="grid grid-cols-2 gap-2 mb-3">[m
+[32m+[m[32m                          <div className="rounded-xl border border-green-200 dark:border-green-900/40 bg-green-50/60 dark:bg-green-950/20 px-3 py-2.5">[m
+[32m+[m[32m                            <p className="text-[10px] font-semibold uppercase tracking-wider text-green-600 dark:text-green-400 mb-1">Melhor desempenho</p>[m
+[32m+[m[32m                            <p className="text-xs font-medium truncate">{best.discipline.icon} {best.discipline.name}</p>[m
+[32m+[m[32m                            <p className="text-xl font-bold text-green-600 dark:text-green-400 mt-0.5">{best.acc.percent}% acertos</p>[m
+[32m+[m[32m                            <p className="text-[10px] text-muted-foreground">{best.acc.answered - best.acc.correct} erros de {best.acc.answered}</p>[m
+[32m+[m[32m                          </div>[m
+[32m+[m[32m                          <div className="rounded-xl border border-red-200 dark:border-red-900/40 bg-red-50/60 dark:bg-red-950/20 px-3 py-2.5">[m
+[32m+[m[32m                            <p className="text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:text-red-400 mb-1">Pior desempenho</p>[m
+[32m+[m[32m                            <p className="text-xs font-medium truncate">{worst.discipline.icon} {worst.discipline.name}</p>[m
+[32m+[m[32m                            <p className="text-xl font-bold text-red-500 dark:text-red-400 mt-0.5">{worst.acc.percent}% acertos</p>[m
+[32m+[m[32m                            <p className="text-[10px] text-muted-foreground">{worst.acc.answered - worst.acc.correct} erros de {worst.acc.answered}</p>[m
+[32m+[m[32m                          </div>[m
+[32m+[m[32m                        </div>[m
+[32m+[m[32m                      ) : ([m
+[32m+[m[32m                        <p className="text-xs text-muted-foreground mb-3 px-1">Responda ao menos {MIN_SAMPLE} questões em uma disciplina para ver o diagnóstico.</p>[m
+[32m+[m[32m                      )}[m
+[32m+[m
+[32m+[m[32m                      <div className="rounded-xl border border-border bg-card px-4 py-3 flex flex-col gap-3">[m
+[32m+[m[32m                        {reliable.length > 0 && ([m
+[32m+[m[32m                          <>[m
+[32m+[m[32m                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground -mb-1">Taxa de acerto · pior → melhor</p>[m
+[32m+[m[32m                            {reliable.map(({ discipline, acc }) => {[m
+[32m+[m[32m                              const barColor = acc.percent >= 70 ? 'bg-green-500' : acc.percent >= 50 ? 'bg-amber-400' : 'bg-red-500'[m
+[32m+[m[32m                              const textColor = acc.percent >= 70 ? 'text-green-600' : acc.percent >= 50 ? 'text-amber-500' : 'text-red-500'[m
+[32m+[m[32m                              const errCount = acc.answered - acc.correct[m
+[32m+[m[32m                              return ([m
+[32m+[m[32m                                <div key={discipline.id}>[m
+[32m+[m[32m                                  <div className="flex items-center justify-between text-xs mb-1.5">[m
+[32m+[m[32m                                    <span className="truncate max-w-[55%] font-medium">{discipline.icon} {discipline.name}</span>[m
+[32m+[m[32m                                    <span className="shrink-0 tabular-nums flex items-center gap-1.5">[m
+[32m+[m[32m                                      <span className="text-muted-foreground">{errCount} erro{errCount !== 1 ? 's' : ''}</span>[m
+[32m+[m[32m                                      <span className={cn('font-bold', textColor)}>{acc.percent}%</span>[m
+[32m+[m[32m                                    </span>[m
+[32m+[m[32m                                  </div>[m
+[32m+[m[32m                                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">[m
+[32m+[m[32m                                    <div className={cn('h-full rounded-full', barColor)} style={{ width: `${acc.percent}%` }} />[m
+[32m+[m[32m                                  </div>[m
+[32m+[m[32m                                </div>[m
+[32m+[m[32m                              )[m
+[32m+[m[32m                            })}[m
+[32m+[m[32m                          </>[m
+[32m+[m[32m                        )}[m
+[32m+[m[32m                        {lowSample.length > 0 && ([m
+[32m+[m[32m                          <>[m
+[32m+[m[32m                            <p className={cn('text-[10px] font-semibold uppercase tracking-wider text-muted-foreground -mb-1', reliable.length > 0 && 'border-t border-border pt-3')}>[m
+[32m+[m[32m                              Em observação (menos de {MIN_SAMPLE} respondidas)[m
+[32m+[m[32m                            </p>[m
+[32m+[m[32m                            {lowSample.map(({ discipline, acc }) => ([m
+[32m+[m[32m                              <div key={discipline.id} className="opacity-50">[m
+[32m+[m[32m                                <div className="flex items-center justify-between text-xs mb-1.5">[m
+[32m+[m[32m                                  <span className="truncate max-w-[55%] font-medium">{discipline.icon} {discipline.name}</span>[m
+[32m+[m[32m                                  <span className="shrink-0 tabular-nums text-muted-foreground">{acc.answered} respondidas</span>[m
+[32m+[m[32m                                </div>[m
+[32m+[m[32m                                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">[m
+[32m+[m[32m                                  <div className="h-full rounded-full bg-muted-foreground/40" style={{ width: `${acc.percent}%` }} />[m
+[32m+[m[32m                                </div>[m
+[32m+[m[32m                              </div>[m
+[32m+[m[32m                            ))}[m
+[32m+[m[32m                          </>[m
+[32m+[m[32m                        )}[m
+[32m+[m[32m                      </div>[m
+[32m+[m[32m                    </div>[m
+[32m+[m[32m                  )[m
+[32m+[m[32m                })()}[m
+[32m+[m
+                 {/* Per discipline + subject */}[m
+                 <div>[m
+                   <h2 className="font-semibold mb-2">Por matéria</h2>[m
