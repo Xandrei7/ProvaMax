@@ -83,12 +83,17 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     }
 
     // Log de monitoramento admin (fire-and-forget — não bloqueia, não afeta progresso)
+    console.log('[monitoring] tentando inserir', { user_id: user.id, question_id: answer.questionId, logged_at: answer.answeredAt })
     supabase.from('question_activity_log').insert({
       user_id: user.id,
       question_id: answer.questionId,
       logged_at: answer.answeredAt,
     }).then(({ error: logErr }) => {
-      if (logErr) console.warn('[monitoring] Falha ao registrar atividade:', logErr.message)
+      if (logErr) {
+        console.error('[monitoring] INSERT falhou:', logErr.message, logErr.details, logErr.hint, logErr.code)
+      } else {
+        console.log('[monitoring] INSERT ok para question_id:', answer.questionId)
+      }
     })
   }
 

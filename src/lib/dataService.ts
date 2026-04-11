@@ -535,10 +535,11 @@ export async function getUserActivityCounts(): Promise<Record<string, { today: n
     .select('user_id, logged_at')
 
   if (error) {
-    // Tabela ainda não existe (migração pendente) — retorna vazio silenciosamente
-    console.warn('[getUserActivityCounts] question_activity_log indisponível:', error.message)
+    console.error('[getUserActivityCounts] erro no SELECT:', error.message, error.details, error.code)
     return {}
   }
+
+  console.log('[getUserActivityCounts] linhas retornadas:', data?.length ?? 0, data?.slice(0, 3))
 
   const result: Record<string, { today: number; week: number; month: number; total: number }> = {}
   for (const row of (data ?? [])) {
