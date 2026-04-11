@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Clock, Target, CheckCircle2, XCircle, BrainCircuit, RotateCcw, ChevronRight } from 'lucide-react'
+import { ArrowLeft, Clock, Target, CheckCircle2, BrainCircuit, RotateCcw, ChevronRight } from 'lucide-react'
 import { BottomNav } from '@/components/BottomNav'
 import { ProgressBar } from '@/components/ProgressBar'
+import { QuestionCard } from '@/components/QuestionCard'
 import {
   getSimuladoById,
   getSimuladoQuestions,
@@ -14,6 +15,7 @@ import {
 import { useStudy } from '@/contexts/StudyContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn, normalizeAnswer, displayAnswer } from '@/lib/utils'
+import { sanitizeRichTextForRender } from '@/lib/richText'
 import type { SimuladoRecord, SimuladoQuestion, Question, Discipline, Subject } from '@/types'
 
 type Phase = 'detail' | 'reviewing' | 'review_result'
@@ -65,126 +67,6 @@ function AccuracyColor(p: number) {
   return 'text-red-500'
 }
 
-// ── Inline review question card ───────────────────────────────────────────────
-
-interface ReviewCardProps {
-  question: Question
-  // Authoritative correct answer from simulado_questions snapshot —
-  // ALWAYS use this for display and validation, never question.correct_answer
-  authorizedCorrectAnswer: string
-  index: number
-  total: number
-  onAnswer: (selected: string) => void
-}
-
-function ReviewCard({ question, authorizedCorrectAnswer, index, total, onAnswer }: ReviewCardProps) {
-  const [selected, setSelected] = useState<string | null>(null)
-  const [submitted, setSubmitted] = useState(false)
-
-  const safeCorrect = normalizeAnswer(authorizedCorrectAnswer, question.type)
-
-  const options =
-    question.type === 'true_false'
-      ? [{ letter: 'C', text: 'Certo' }, { letter: 'E', text: 'Errado' }]
-      : (question.options ?? [])
-
-  function handleSubmit() {
-    if (!selected) return
-    setSubmitted(true)
-  }
-
-  function handleNext() {
-    onAnswer(selected!)
-  }
-
-  const userGotItRight = submitted && selected !== null && normalizeAnswer(selected, question.type) === safeCorrect
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Revisão · Questão {index + 1} de {total}</span>
-        <span className={cn(
-          'rounded-full px-2 py-0.5 text-xs font-medium',
-          question.type === 'true_false' ? 'bg-amber-100 text-amber-700' : 'bg-primary/10 text-primary'
-        )}>
-          {question.type === 'true_false' ? 'C/E' : 'Múltipla escolha'}
-        </span>
-      </div>
-
-      <p className="text-base leading-relaxed">{question.statement}</p>
-
-      <div className={cn('flex flex-col gap-2', question.type === 'true_false' && 'flex-row')}>
-        {options.map(opt => {
-          const optNorm      = normalizeAnswer(opt.letter, question.type)
-          const isCorrectOpt = optNorm === safeCorrect
-          const isSelected   = selected !== null && normalizeAnswer(selected, question.type) === optNorm
-          let cls = 'flex items-start gap-3 rounded-lg border px-4 py-3 text-left text-sm transition-colors'
-          if (submitted) {
-            if (isCorrectOpt)        cls += ' border-green-500 bg-green-50 dark:bg-green-950/30'
-            else if (isSelected)     cls += ' border-red-500 bg-red-50 dark:bg-red-950/30'
-            else                     cls += ' border-border opacity-60'
-          } else {
-            cls += isSelected
-              ? ' border-primary bg-primary/10'
-              : ' border-border hover:border-primary hover:bg-primary/5 cursor-pointer'
-          }
-          if (question.type === 'true_false') cls += ' flex-1 justify-center'
-          return (
-            <button
-              key={opt.letter}
-              disabled={submitted}
-              onClick={() => !submitted && setSelected(opt.letter)}
-              className={cls}
-            >
-              {question.type !== 'true_false' && <span className="font-bold shrink-0">{opt.letter}.</span>}
-              <span dangerouslySetInnerHTML={{ __html: opt.text }} />
-              {submitted && isCorrectOpt && <CheckCircle2 size={15} className="text-green-500 shrink-0 ml-auto" />}
-              {submitted && isSelected && !isCorrectOpt && <XCircle size={15} className="text-red-500 shrink-0 ml-auto" />}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Feedback after submission */}
-      {submitted && (
-        <div className={cn(
-          'rounded-xl border p-4 text-sm flex flex-col gap-2',
-          userGotItRight
-            ? 'border-green-500/30 bg-green-50 dark:bg-green-950/20'
-            : 'border-red-500/30 bg-red-50 dark:bg-red-950/20'
-        )}>
-          <p className={cn(
-            'font-semibold',
-            userGotItRight ? 'text-green-600' : 'text-red-600'
-          )}>
-            {userGotItRight ? '✓ Correto!' : `✗ Incorreto — resposta: ${displayAnswer(authorizedCorrectAnswer, question.type)}`}
-          </p>
-          {question.comment && (
-            <p className="text-muted-foreground leading-relaxed">{question.comment}</p>
-          )}
-        </div>
-      )}
-
-      {!submitted ? (
-        <button
-          onClick={handleSubmit}
-          disabled={!selected}
-          className="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-        >
-          Confirmar resposta
-        </button>
-      ) : (
-        <button
-          onClick={handleNext}
-          className="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          {index < total - 1 ? 'Próxima questão' : 'Ver resultado da revisão'}
-        </button>
-      )}
-    </div>
-  )
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function SimuladoDetail() {
@@ -204,6 +86,8 @@ export function SimuladoDetail() {
   const [phase, setPhase] = useState<Phase>('detail')
   const [reviewIndex, setReviewIndex] = useState(0)
   const [reviewAnswers, setReviewAnswers] = useState<ReviewAnswer[]>([])
+  const [reviewSelected, setReviewSelected] = useState<string | null>(null)
+  const [reviewSubmitted, setReviewSubmitted] = useState(false)
 
   useEffect(() => {
     if (!simuladoId || !user) return
@@ -259,6 +143,18 @@ export function SimuladoDetail() {
     })
     .filter(Boolean) as WrongItem[]
 
+  function resetReviewSession(nextPhase: Phase = 'detail') {
+    setPhase(nextPhase)
+    setReviewIndex(0)
+    setReviewAnswers([])
+    setReviewSelected(null)
+    setReviewSubmitted(false)
+  }
+
+  function startReviewSession() {
+    resetReviewSession('reviewing')
+  }
+
   // Per-discipline breakdown — recompute correctness from normalized snapshot
   const discBreakdown = disciplines
     .map(d => {
@@ -303,48 +199,54 @@ export function SimuladoDetail() {
     const item = wrongItems[reviewIndex]
     if (!item) return null
     const { sq: reviewSq, question: reviewQ } = item
-    // Use snapshot correct_answer as the authoritative source — this is what was
-    // displayed to the user in the wrong-questions list, so validation must match it.
-    const snapshotCorrect = reviewSq.correct_answer
+    const reviewQuestion: Question = { ...reviewQ, correct_answer: reviewSq.correct_answer }
 
-    function handleAnswer(selected: string) {
-      // Valida usando snapshot normalizado com o tipo correto da questão
-      const qType = reviewQ.type
+    function handleSubmitReview() {
+      if (!reviewSelected || reviewSubmitted) return
+
+      const qType = reviewQuestion.type
       const isCorrect =
-        normalizeAnswer(selected, qType) === normalizeAnswer(snapshotCorrect, qType)
-      const newAns: ReviewAnswer = { questionId: reviewQ.id, selected, isCorrect }
-      const updated = [...reviewAnswers, newAns]
-      setReviewAnswers(updated)
+        normalizeAnswer(reviewSelected, qType) === normalizeAnswer(reviewSq.correct_answer, qType)
 
-      // Record to user_answers (updates overall progress)
+      setReviewAnswers(prev => [...prev, { questionId: reviewQuestion.id, selected: reviewSelected, isCorrect }])
+      setReviewSubmitted(true)
+
       recordAnswer({
-        questionId: reviewQ.id,
-        selectedAnswer: selected,
+        questionId: reviewQuestion.id,
+        selectedAnswer: reviewSelected,
         isCorrect,
         answeredAt: new Date().toISOString(),
       })
 
       if (!isCorrect) {
         generateFlashcard({
-          question: reviewQ,
-          selectedAnswer: selected,
+          question: reviewQuestion,
+          selectedAnswer: reviewSelected,
           sourceType: 'review',
           simuladoId: currentSimulado.id,
         }).catch(console.error)
       }
+    }
 
+    function handleNextReview() {
+      if (!reviewSubmitted) return
       if (reviewIndex < wrongItems.length - 1) {
         setReviewIndex(i => i + 1)
-      } else {
-        setPhase('review_result')
+        setReviewSelected(null)
+        setReviewSubmitted(false)
+        return
       }
+
+      setReviewSelected(null)
+      setReviewSubmitted(false)
+      setPhase('review_result')
     }
 
     return (
       <div className="flex min-h-screen flex-col bg-background">
         <div className="sticky top-0 z-10 border-b border-border bg-background px-4 py-3 flex items-center gap-3">
           <button
-            onClick={() => { setPhase('detail'); setReviewIndex(0); setReviewAnswers([]) }}
+            onClick={() => resetReviewSession()}
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft size={20} />
@@ -357,13 +259,22 @@ export function SimuladoDetail() {
         </div>
         <div className="flex-1 mx-auto w-full max-w-lg px-4 py-4 pb-8">
           <div className="mb-3"><ProgressBar value={reviewIndex} max={wrongItems.length} /></div>
-          <ReviewCard
-            key={reviewQ.id}
-            question={reviewQ}
-            authorizedCorrectAnswer={snapshotCorrect}
-            index={reviewIndex}
-            total={wrongItems.length}
-            onAnswer={handleAnswer}
+          <QuestionCard
+            key={reviewQuestion.id}
+            question={reviewQuestion}
+            questionNumber={reviewIndex + 1}
+            totalQuestions={wrongItems.length}
+            selected={reviewSelected}
+            submitted={reviewSubmitted}
+            onSelect={setReviewSelected}
+            onSubmit={handleSubmitReview}
+            onNext={handleNextReview}
+            onPrev={() => undefined}
+            onSkip={() => undefined}
+            isFirst={reviewIndex === 0}
+            isLast={reviewIndex === wrongItems.length - 1}
+            hidePrev
+            hideSkip
           />
         </div>
       </div>
@@ -377,7 +288,7 @@ export function SimuladoDetail() {
     return (
       <div className="flex min-h-screen flex-col bg-background">
         <div className="sticky top-0 z-10 border-b border-border bg-background px-4 py-3 flex items-center gap-3">
-          <button onClick={() => { setPhase('detail'); setReviewIndex(0); setReviewAnswers([]) }}
+          <button onClick={() => resetReviewSession()}
             className="rounded-md p-1 text-muted-foreground hover:text-foreground">
             <ArrowLeft size={20} />
           </button>
@@ -404,14 +315,14 @@ export function SimuladoDetail() {
               : 'Revise o material e tente novamente para fixar o conteúdo.'}
           </p>
           <button
-            onClick={() => { setPhase('detail'); setReviewIndex(0); setReviewAnswers([]) }}
+            onClick={() => resetReviewSession()}
             className="rounded-xl border border-border px-4 py-3 text-sm font-medium hover:bg-muted/50"
           >
             Voltar ao resumo do simulado
           </button>
           {wrongItems.length > 0 && (
             <button
-              onClick={() => { setReviewIndex(0); setReviewAnswers([]); setPhase('reviewing') }}
+              onClick={startReviewSession}
               className="flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
             >
               <RotateCcw size={15} /> Refazer erros novamente
@@ -547,7 +458,10 @@ export function SimuladoDetail() {
                         {idx + 1}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm line-clamp-3 leading-relaxed">{q.statement}</p>
+                        <p
+                          className="text-sm line-clamp-3 leading-relaxed"
+                          dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(q.statement) }}
+                        />
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2">
                           {disc && (
                             <span className="text-xs text-muted-foreground">{disc.icon} {disc.name}</span>
@@ -564,6 +478,17 @@ export function SimuladoDetail() {
                             Correta: {displayAnswer(sq.correct_answer, q.type)}
                           </span>
                         </div>
+                        {q.comment && (
+                          <div className="mt-2 rounded-lg border border-border bg-muted/20 px-3 py-2">
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Comentário
+                            </p>
+                            <p
+                              className="text-xs leading-relaxed line-clamp-3 text-muted-foreground"
+                              dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(q.comment, true) }}
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -576,7 +501,7 @@ export function SimuladoDetail() {
         {/* Refazer erros CTA */}
         {wrongSimQs.length > 0 && (
           <button
-            onClick={() => { setReviewIndex(0); setReviewAnswers([]); setPhase('reviewing') }}
+            onClick={startReviewSession}
             className="flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
           >
             <Target size={16} />

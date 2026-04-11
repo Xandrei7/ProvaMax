@@ -1,14 +1,24 @@
-import { useEffect, useState, useCallback } from 'react'
-import { XCircle, RotateCcw } from 'lucide-react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { XCircle, RotateCcw, Brain } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { QuestionCard } from '@/components/QuestionCard'
-import { generateFlashcard, getQuestions } from '@/lib/dataService'
+import { generateFlashcard, getQuestionsByIds } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
+import { normalizeAnswer } from '@/lib/utils'
 import type { Question, UserAnswer } from '@/types'
 
+interface ErrorReviewLocationState {
+  source?: 'simulado'
+  questionIds?: string[]
+  simuladoId?: string
+}
+
 export function Errors() {
-  const { answers, recordAnswer, getWrongAnswers } = useStudy()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { answers, recordAnswer } = useStudy()
   const [questions, setQuestions] = useState<Question[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -18,22 +28,36 @@ export function Errors() {
   const [selected, setSelected] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState(false)
 
-  const wrongAnswers = getWrongAnswers()
+  const locationState = (location.state ?? null) as ErrorReviewLocationState | null
+  const scopedQuestionIds = useMemo(() => {
+    const rawIds = Array.isArray(locationState?.questionIds) ? locationState.questionIds : []
+    return [...new Set(rawIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
+  }, [locationState])
+  const isSimuladoScoped = locationState?.source === 'simulado' && scopedQuestionIds.length > 0
+  const scopedSimuladoId = typeof locationState?.simuladoId === 'string' && locationState.simuladoId.length > 0
+    ? locationState.simuladoId
+    : null
+
+  const questionIdsForReview = useMemo(() => {
+    if (isSimuladoScoped) return scopedQuestionIds
+    return answers.filter(a => !a.isCorrect).map(a => a.questionId)
+  }, [isSimuladoScoped, scopedQuestionIds, answers])
 
   useEffect(() => {
     async function load() {
-      const wrongIds = wrongAnswers.map(a => a.questionId)
+      const wrongIds = questionIdsForReview
       if (wrongIds.length === 0) {
         setQuestions([])
         setLoading(false)
         return
       }
-      const all = await getQuestions()
-      setQuestions(all.filter(q => wrongIds.includes(q.id)))
+      const loaded = await getQuestionsByIds(wrongIds)
+      const byId = new Map(loaded.map(q => [q.id, q]))
+      setQuestions(wrongIds.map(id => byId.get(id)).filter(Boolean) as Question[])
       setLoading(false)
     }
     load()
-  }, [answers]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [questionIdsForReview])
 
   function startReview() {
     setCurrentIndex(0)
@@ -56,20 +80,24 @@ export function Errors() {
     const answer: UserAnswer = {
       questionId: q.id,
       selectedAnswer: selected,
-      isCorrect: selected === q.correct_answer,
+      isCorrect: normalizeAnswer(selected, q.type) === normalizeAnswer(q.correct_answer, q.type),
       answeredAt: new Date().toISOString(),
     }
     recordAnswer(answer)
     setSubmitted(true)
 
     if (!answer.isCorrect) {
+      const flashcardSource = (isSimuladoScoped && scopedSimuladoId)
+        ? { sourceType: 'simulado' as const, simuladoId: scopedSimuladoId }
+        : { sourceType: 'review' as const }
+
       generateFlashcard({
         question: q,
         selectedAnswer: selected,
-        sourceType: 'review',
+        ...flashcardSource,
       }).catch(console.error)
     }
-  }, [selected, questions, currentIndex, submitted, recordAnswer])
+  }, [selected, questions, currentIndex, submitted, recordAnswer, isSimuladoScoped, scopedSimuladoId])
 
   const currentQuestion = questions[currentIndex]
 
@@ -77,7 +105,9 @@ export function Errors() {
     <div className="flex min-h-screen flex-col bg-background">
       <Header
         title="Caderno de Erros"
-        subtitle={reviewing ? 'Refazendo erros' : 'Revise suas questões erradas'}
+        subtitle={reviewing
+          ? (isSimuladoScoped ? 'Refazendo erros do simulado' : 'Refazendo erros')
+          : (isSimuladoScoped ? 'Revise os erros deste simulado' : 'Revise suas questões erradas')}
       />
       <main className="mx-auto w-full max-w-lg flex-1 px-4 py-4 pb-24">
         {loading ? (
@@ -87,19 +117,21 @@ export function Errors() {
         ) : questions.length === 0 ? (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
             <XCircle size={48} className="text-muted-foreground/40" />
-            <p className="font-medium">Nenhum erro registrado!</p>
+            <p className="font-medium">{isSimuladoScoped ? 'Nenhum erro deste simulado.' : 'Nenhum erro registrado!'}</p>
             <p className="text-sm text-muted-foreground">
-              Continue respondendo questões para ver seus erros aqui.
+              {isSimuladoScoped
+                ? 'Conclua outro simulado para revisar novos erros por tentativa.'
+                : 'Continue respondendo questões para ver seus erros aqui.'}
             </p>
           </div>
         ) : !reviewing ? (
           <div className="flex flex-col gap-4">
             <div className="rounded-xl border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-900/50 p-4">
               <p className="font-medium text-red-700 dark:text-red-400">
-                {questions.length} questões erradas
+                {questions.length} questões erradas{isSimuladoScoped ? ' neste simulado' : ''}
               </p>
               <p className="text-sm text-red-600/70 dark:text-red-400/70 mt-0.5">
-                Refaça as questões que você errou.
+                {isSimuladoScoped ? 'Refaça apenas os erros desta tentativa.' : 'Refaça as questões que você errou.'}
               </p>
             </div>
             <button
@@ -109,6 +141,15 @@ export function Errors() {
               <RotateCcw size={16} />
               Revisar erros
             </button>
+            {isSimuladoScoped && (
+              <button
+                onClick={() => navigate('/flashcards?section=simulado&source=simulado')}
+                className="flex items-center justify-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-medium text-primary hover:bg-primary/10"
+              >
+                <Brain size={16} />
+                Ir para Flashcards de Simulados
+              </button>
+            )}
           </div>
         ) : currentQuestion ? (
           <QuestionCard

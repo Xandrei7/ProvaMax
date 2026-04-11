@@ -8,6 +8,7 @@ import { getDisciplines, getSubjects, getQuestions, saveSimulado, generateFlashc
 import { useStudy } from '@/contexts/StudyContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { shuffle, cn, normalizeAnswer } from '@/lib/utils'
+import { sanitizeRichTextForRender } from '@/lib/richText'
 import type { Discipline, Subject, Question } from '@/types'
 
 type SimTab = 'basico' | 'avancado'
@@ -105,10 +106,12 @@ export function Simulado() {
   const [selected, setSelected] = useState<string | null>(null)
   const [confidence, setConfidence] = useState<'P' | 'C' | null>(null)
   const [eliminated, setEliminated] = useState<Set<string>>(new Set())
+  const [associatedOpen, setAssociatedOpen] = useState(false)
   const touchStartRef = useRef<Record<string, { x: number; y: number }>>({})
   const [timeLeft, setTimeLeft] = useState(0)
   const [activeTime, setActiveTime] = useState(0)
   const [isAdvancedRun, setIsAdvancedRun] = useState(false)
+  const [savedSimuladoId, setSavedSimuladoId] = useState<string | null>(null)
   const simAnswersRef = useRef<SimAnswer[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const finishedRef = useRef(false)
@@ -223,9 +226,11 @@ export function Simulado() {
     setSelected(null)
     setConfidence(null)
     setEliminated(new Set())
+    setAssociatedOpen(false)
     setActiveTime(mins * 60)
     setTimeLeft(mins * 60)
     setIsAdvancedRun(isAdv)
+    setSavedSimuladoId(null)
     setPhase('running')
   }
 
@@ -251,6 +256,7 @@ export function Simulado() {
     setSelected(null)
     setConfidence(null)
     setEliminated(new Set())
+    setAssociatedOpen(false)
 
     if (currentIndex === questions.length - 1) {
       finishedRef.current = true
@@ -297,6 +303,7 @@ export function Simulado() {
         durationSeconds,
       })
       .then(saved => {
+        setSavedSimuladoId(saved.id)
         // Generate flashcards for wrong answers in the background
         const wrongAnswers = answers.filter(a => !a.isCorrect && a.selected !== null)
         const wrongIds = new Set(wrongAnswers.map(wa => wa.questionId))
@@ -425,7 +432,27 @@ export function Simulado() {
               )}
             </div>
 
-            <p className="text-base leading-relaxed">{currentQuestion.statement}</p>
+            {currentQuestion.associated_text && (
+              <div className="rounded-lg border border-blue-200 dark:border-blue-900/50 overflow-hidden">
+                <button
+                  onClick={() => setAssociatedOpen(v => !v)}
+                  className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50/60 dark:hover:bg-blue-950/20 transition-colors"
+                >
+                  <span>Texto associado {associatedOpen ? '(−)' : '(+)'}</span>
+                  {associatedOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                </button>
+                {associatedOpen && (
+                  <div className="border-t border-blue-200 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/10 px-4 py-3">
+                    <p
+                      className="text-sm leading-relaxed text-foreground/90"
+                      dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(currentQuestion.associated_text) }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <p className="text-base leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(currentQuestion.statement) }} />
 
             <div className={cn('flex flex-col gap-2', currentQuestion.type === 'true_false' && 'flex-row')}>
               {options.map(opt => {
@@ -454,7 +481,7 @@ export function Simulado() {
                       )}
                     >
                       {currentQuestion.type !== 'true_false' && <span className={cn('font-bold shrink-0', isElim && 'line-through')}>{opt.letter}.</span>}
-                      <span className={cn(isElim && 'line-through')} dangerouslySetInnerHTML={{ __html: opt.text }} />
+                      <span className={cn(isElim && 'line-through')} dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(opt.text) }} />
                     </button>
                     {showScissors && (
                       <button
@@ -492,6 +519,9 @@ export function Simulado() {
     const answered = simAnswers.filter(a => a.selected !== null).length
     const correct = simAnswers.filter(a => a.isCorrect).length
     const wrong = answered - correct
+    const wrongQuestionIds = simAnswers
+      .filter(a => !a.isCorrect && a.selected !== null)
+      .map(a => a.questionId)
     const skipped = questions.length - answered
     const percent = answered === 0 ? 0 : Math.round((correct / answered) * 100)
 
@@ -597,8 +627,25 @@ export function Simulado() {
 
             <div className="flex flex-col gap-2">
               {wrong > 0 && (
-                <button onClick={() => navigate('/errors')} className="rounded-xl border border-border px-4 py-3 text-sm font-medium hover:bg-muted/50">
+                <button
+                  onClick={() => navigate('/errors', {
+                    state: {
+                      source: 'simulado',
+                      questionIds: wrongQuestionIds,
+                      simuladoId: savedSimuladoId ?? undefined,
+                    },
+                  })}
+                  className="rounded-xl border border-border px-4 py-3 text-sm font-medium hover:bg-muted/50"
+                >
                   Revisar {wrong} erro{wrong > 1 ? 's' : ''}
+                </button>
+              )}
+              {wrong > 0 && (
+                <button
+                  onClick={() => navigate('/flashcards?section=simulado&source=simulado')}
+                  className="rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-medium text-primary hover:bg-primary/10"
+                >
+                  Flashcards de erros de simulados
                 </button>
               )}
               <button

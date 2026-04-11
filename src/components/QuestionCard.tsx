@@ -3,6 +3,7 @@ import { Flag, ChevronDown, ChevronUp, Bookmark, Lightbulb, Scissors } from 'luc
 import { cn, normalizeAnswer, displayAnswer } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { submitReport } from '@/lib/dataService'
+import { sanitizeRichTextForRender } from '@/lib/richText'
 import { toast } from 'sonner'
 import type { Question } from '@/types'
 
@@ -20,6 +21,8 @@ interface QuestionCardProps {
   onSkip: () => void
   isFirst: boolean
   isLast: boolean
+  hidePrev?: boolean
+  hideSkip?: boolean
 }
 
 export function QuestionCard({
@@ -35,6 +38,8 @@ export function QuestionCard({
   onSkip,
   isFirst,
   isLast,
+  hidePrev = false,
+  hideSkip = false,
 }: QuestionCardProps) {
   const { user } = useAuth()
 
@@ -156,7 +161,7 @@ export function QuestionCard({
             <div className="border-t border-blue-200 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/10 px-4 py-3">
               <p
                 className="text-sm leading-relaxed text-foreground/90 whitespace-pre-line"
-                dangerouslySetInnerHTML={{ __html: question.associated_text ?? '' }}
+                dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(question.associated_text) }}
               />
             </div>
           )}
@@ -164,7 +169,7 @@ export function QuestionCard({
       )}
 
       {/* Statement */}
-      <p className="text-base leading-relaxed" dangerouslySetInnerHTML={{ __html: question.statement }} />
+      <p className="text-base leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(question.statement) }} />
 
       {/* Options */}
       <div className={cn('flex flex-col gap-2', question.type === 'true_false' && 'flex-row')}>
@@ -220,7 +225,7 @@ export function QuestionCard({
                 {question.type !== 'true_false' && (
                   <span className={cn('font-bold shrink-0', isEliminated && 'line-through')}>{opt.letter}.</span>
                 )}
-                <span className={cn(isEliminated && 'line-through')} dangerouslySetInnerHTML={{ __html: opt.text }} />
+                <span className={cn(isEliminated && 'line-through')} dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(opt.text) }} />
               </button>
               {showScissors && (
                 <button
@@ -269,7 +274,7 @@ export function QuestionCard({
           </button>
           {commentOpen && (
             <div className="border-t border-border px-4 py-3 flex flex-col gap-3">
-              <p className="text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: question.comment ?? '' }} />
+              <p className="text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(question.comment, true) }} />
               {question.legal_basis && (
                 <div className="flex gap-2 text-sm text-muted-foreground">
                   <Bookmark size={14} className="shrink-0 mt-0.5" />
@@ -289,7 +294,7 @@ export function QuestionCard({
 
       {/* Navigation */}
       <div className="flex gap-2 pt-1">
-        {!isFirst && (
+        {!hidePrev && !isFirst && (
           <button
             onClick={onPrev}
             className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted/50"
@@ -307,7 +312,7 @@ export function QuestionCard({
             >
               Responder questão
             </button>
-            {!isLast && (
+            {!hideSkip && !isLast && (
               <button
                 onClick={onSkip}
                 className="rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted/50"

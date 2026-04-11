@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   BookOpen,
@@ -24,10 +25,24 @@ import { useAuth } from '@/contexts/AuthContext'
 import type { Discipline, Flashcard, Subject } from '@/types'
 
 type Phase = 'overview' | 'reviewing' | 'finished'
-type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only' | 'critical'
+type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only' | 'critical' | 'simulado_errors'
 type DisplayMode = 'quick' | 'deep'
 type QuickSection = 'all' | 'new' | 'reviewing' | 'mastered' | 'simulado' | 'study'
 type ReviewAction = 'correct' | 'easy' | 'wrong' | 'skip' | 'mastered'
+
+function getQuickSectionFromParam(value: string | null): QuickSection {
+  if (value === 'new' || value === 'reviewing' || value === 'mastered' || value === 'simulado' || value === 'study') {
+    return value
+  }
+  return 'all'
+}
+
+function getSourceFilterFromParam(value: string | null): 'all' | Flashcard['source_type'] {
+  if (value === 'study' || value === 'simulado' || value === 'review' || value === 'import') {
+    return value
+  }
+  return 'all'
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -94,6 +109,13 @@ function buildEliteQueue(cards: Flashcard[], mode: ReviewMode, disciplineId: str
       .sort((a, b) => getDifficultyScore(b) - getDifficultyScore(a) || b.times_wrong - a.times_wrong)
   }
 
+  if (mode === 'simulado_errors') {
+    // Erros cometidos em simulados (foco dedicado)
+    return base
+      .filter(c => c.source_type === 'simulado' && c.times_wrong > 0 && c.status !== 'mastered')
+      .sort((a, b) => b.times_wrong - a.times_wrong || priorityScore(b) - priorityScore(a))
+  }
+
   if (mode === 'vespera') {
     // Modo Véspera: todos os cards problemáticos, sem respeitar schedule
     return base
@@ -118,6 +140,7 @@ function buildEliteQueue(cards: Flashcard[], mode: ReviewMode, disciplineId: str
 
 export function Flashcards() {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
 
   const [phase, setPhase] = useState<Phase>('overview')
   const [loading, setLoading] = useState(true)
@@ -127,11 +150,11 @@ export function Flashcards() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
 
-  const [quickSection, setQuickSection] = useState<QuickSection>('all')
+  const [quickSection, setQuickSection] = useState<QuickSection>(() => getQuickSectionFromParam(searchParams.get('section')))
   const [disciplineFilter, setDisciplineFilter] = useState('all')
   const [subjectFilter, setSubjectFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<'all' | Flashcard['status']>('all')
-  const [sourceFilter, setSourceFilter] = useState<'all' | Flashcard['source_type']>('all')
+  const [sourceFilter, setSourceFilter] = useState<'all' | Flashcard['source_type']>(() => getSourceFilterFromParam(searchParams.get('source')))
 
   const [displayMode, setDisplayMode] = useState<DisplayMode>('deep')
   const [reviewDiscipline, setReviewDiscipline] = useState('all')
@@ -204,6 +227,9 @@ export function Flashcards() {
   const studyCount = flashcards.filter(c => c.source_type === 'study').length
   const errorsOnlyCount = eliteCards.filter(c => c.times_wrong > 0 && c.status !== 'mastered').length
   const hardCount = eliteCards.filter(c => getDifficultyScore(c) > 0.3 && c.status !== 'mastered').length
+  const simuladoErrorsCount = eliteCards.filter(
+    c => c.source_type === 'simulado' && c.times_wrong > 0 && c.status !== 'mastered',
+  ).length
   const vesperaCount = eliteCards.filter(
     c => c.status !== 'mastered' && (c.times_wrong > 0 || (c.interval_days ?? 1) <= 7),
   ).length
@@ -448,6 +474,9 @@ export function Flashcards() {
             {activeReviewMode === 'vespera' && (
               <span className="text-xs text-purple-500 font-semibold">Véspera</span>
             )}
+            {activeReviewMode === 'simulado_errors' && (
+              <span className="text-xs text-sky-600 font-semibold">Erros de simulados</span>
+            )}
           </div>
 
           {/* Frente do card */}
@@ -621,6 +650,16 @@ export function Flashcards() {
                 <Gauge size={16} />
                 <span>Só Difíceis</span>
                 <span className="opacity-80">{hardCount} cards</span>
+              </button>
+
+              <button
+                onClick={() => startReview('simulado_errors', reviewDiscipline)}
+                disabled={simuladoErrorsCount === 0}
+                className="col-span-2 rounded-xl bg-sky-600 text-white px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
+              >
+                <Target size={16} />
+                <span>Erros de Simulados</span>
+                <span className="opacity-80">{simuladoErrorsCount} cards</span>
               </button>
 
               <button
