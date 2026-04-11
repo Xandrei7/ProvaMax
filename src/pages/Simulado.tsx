@@ -95,6 +95,8 @@ export function Simulado() {
   const [advQuestionCount, setAdvQuestionCount] = useState(20)
   const [advTimeMinutes, setAdvTimeMinutes] = useState(30)
   const [expandedDisc, setExpandedDisc] = useState<string | null>(null)
+  const [basicDiscCounts, setBasicDiscCounts] = useState<Map<string, number>>(new Map())
+  const [advDiscCounts, setAdvDiscCounts] = useState<Map<string, number>>(new Map())
 
   // ── Running state ────────────────────────────────────────────────────────
   const [questions, setQuestions] = useState<Question[]>([])
@@ -158,9 +160,19 @@ export function Simulado() {
   }
 
   function startBasico() {
-    const pool = getBasicPool()
-    const qs = shuffle(pool).slice(0, Math.min(questionCount, pool.length))
-    launchRun(qs, timeMinutes, false)
+    if (basicDiscs.size === 0) {
+      const pool = getBasicPool()
+      const qs = shuffle(pool).slice(0, Math.min(questionCount, pool.length))
+      launchRun(qs, timeMinutes, false)
+      return
+    }
+    const collected: Question[] = []
+    for (const discId of basicDiscs) {
+      const discPool = allQuestions.filter(q => q.discipline_id === discId)
+      const target = basicDiscCounts.get(discId) ?? discPool.length
+      collected.push(...shuffle(discPool).slice(0, Math.min(target, discPool.length)))
+    }
+    launchRun(collected, timeMinutes, false)
   }
 
   // ── Avançado ─────────────────────────────────────────────────────────────
@@ -178,13 +190,26 @@ export function Simulado() {
   const canStartAdv = (advDiscs.size === 0 ? advEligibleDiscs.length : advDiscs.size) >= 2
 
   function startAvancado() {
-    const pool = getAdvPool()
+    const discsToUse = advDiscs.size > 0 ? [...advDiscs] : advEligibleDiscs.map(d => d.id)
+    const hasPerDiscLimits = advDiscs.size > 0 && [...advDiscs].some(id => advDiscCounts.has(id))
     const bySubject = new Map<string, Question[]>()
-    for (const q of pool) {
-      if (!bySubject.has(q.subject_id)) bySubject.set(q.subject_id, [])
-      bySubject.get(q.subject_id)!.push(q)
+    let cappedTotal = 0
+
+    for (const discId of discsToUse) {
+      let discQs = allQuestions.filter(q => q.discipline_id === discId)
+      if (advSubjects.size > 0) discQs = discQs.filter(q => advSubjects.has(q.subject_id))
+      if (hasPerDiscLimits && advDiscCounts.has(discId)) {
+        const limit = advDiscCounts.get(discId)!
+        discQs = shuffle(discQs).slice(0, Math.min(limit, discQs.length))
+      }
+      cappedTotal += discQs.length
+      for (const q of discQs) {
+        if (!bySubject.has(q.subject_id)) bySubject.set(q.subject_id, [])
+        bySubject.get(q.subject_id)!.push(q)
+      }
     }
-    const total = Math.min(advQuestionCount, pool.length)
+
+    const total = hasPerDiscLimits ? cappedTotal : Math.min(advQuestionCount, cappedTotal)
     const qs = buildInterleavedQuestions(bySubject, total)
     launchRun(qs, advTimeMinutes, true)
   }
@@ -312,6 +337,7 @@ export function Simulado() {
         // also deselect all subjects of this discipline
         const discSubIds = subjects.filter(s => s.discipline_id === id).map(s => s.id)
         setAdvSubjects(ps => { const ns = new Set(ps); discSubIds.forEach(sid => ns.delete(sid)); return ns })
+        setAdvDiscCounts(pc => { const nc = new Map(pc); nc.delete(id); return nc })
       } else {
         next.add(id)
       }
@@ -652,44 +678,76 @@ export function Simulado() {
                   const count = allQuestions.filter(q => q.discipline_id === d.id).length
                   const sel = basicDiscs.has(d.id)
                   return (
-                    <button
+                    <div
                       key={d.id}
                       onClick={() => {
-                        setBasicDiscs(prev => { const n = new Set(prev); if (sel) n.delete(d.id); else n.add(d.id); return n })
+                        setBasicDiscs(prev => {
+                          const n = new Set(prev)
+                          if (sel) {
+                            n.delete(d.id)
+                            setBasicDiscCounts(pc => { const nc = new Map(pc); nc.delete(d.id); return nc })
+                          } else {
+                            n.add(d.id)
+                          }
+                          return n
+                        })
                       }}
                       className={cn(
-                        'flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all',
+                        'flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all cursor-pointer',
                         sel ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
                       )}
                     >
                       <span className="text-xl">{d.icon}</span>
                       <span className="flex-1 font-medium text-sm">{d.name}</span>
-                      <span className="text-xs text-muted-foreground">{count} questões</span>
+                      {sel ? (
+                        <input
+                          type="number"
+                          min={1}
+                          max={count}
+                          value={basicDiscCounts.get(d.id) ?? ''}
+                          placeholder={`${count}`}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => {
+                            const v = parseInt(e.target.value)
+                            setBasicDiscCounts(prev => {
+                              const next = new Map(prev)
+                              if (!isNaN(v) && v > 0) next.set(d.id, v)
+                              else next.delete(d.id)
+                              return next
+                            })
+                          }}
+                          className="w-14 rounded border border-primary/40 bg-background px-2 py-1 text-sm text-center"
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{count} questões</span>
+                      )}
                       {sel && <CheckCircle2 size={16} className="text-primary shrink-0" />}
-                    </button>
+                    </div>
                   )
                 })}
               </div>
             </div>
 
-            {/* Count */}
-            <div>
-              <h2 className="font-semibold mb-2">Número de questões</h2>
-              <div className="flex gap-2 flex-wrap">
-                {[10, 20, 30, 50].filter(n => n <= basicMax).concat(basicMax > 50 ? [basicMax] : []).map(n => (
-                  <button
-                    key={n}
-                    onClick={() => setQuestionCount(n)}
-                    className={cn(
-                      'rounded-lg border px-4 py-2 text-sm font-medium transition-all',
-                      questionCount === n ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/50'
-                    )}
-                  >
-                    {n === basicMax && n > 50 ? `Todas (${n})` : n}
-                  </button>
-                ))}
+            {/* Count — only shown when no disciplines selected (all-mode) */}
+            {basicDiscs.size === 0 && (
+              <div>
+                <h2 className="font-semibold mb-2">Número de questões</h2>
+                <div className="flex gap-2 flex-wrap">
+                  {[10, 20, 30, 50].filter(n => n <= basicMax).concat(basicMax > 50 ? [basicMax] : []).map(n => (
+                    <button
+                      key={n}
+                      onClick={() => setQuestionCount(n)}
+                      className={cn(
+                        'rounded-lg border px-4 py-2 text-sm font-medium transition-all',
+                        questionCount === n ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/50'
+                      )}
+                    >
+                      {n === basicMax && n > 50 ? `Todas (${n})` : n}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Time */}
             <div>
@@ -714,8 +772,19 @@ export function Simulado() {
               <p className="text-center text-sm text-muted-foreground py-4">Importe questões primeiro.</p>
             ) : (
               <button onClick={startBasico} className="rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
-                Iniciar Simulado — {Math.min(questionCount, basicMax)} questões
-                {timeMinutes > 0 ? ` · ${timeMinutes} min` : ''}
+                {(() => {
+                  let total: number
+                  if (basicDiscs.size === 0) {
+                    total = Math.min(questionCount, basicMax)
+                  } else {
+                    total = [...basicDiscs].reduce((acc, discId) => {
+                      const avail = allQuestions.filter(q => q.discipline_id === discId).length
+                      const target = basicDiscCounts.get(discId) ?? avail
+                      return acc + Math.min(target, avail)
+                    }, 0)
+                  }
+                  return `Iniciar Simulado — ${total} questões${timeMinutes > 0 ? ` · ${timeMinutes} min` : ''}`
+                })()}
               </button>
             )}
           </div>
@@ -776,6 +845,25 @@ export function Simulado() {
                           </div>
                           {discSel && <CheckCircle2 size={15} className="text-primary shrink-0" />}
                         </button>
+                        {discSel && (
+                          <input
+                            type="number"
+                            min={1}
+                            value={advDiscCounts.get(d.id) ?? ''}
+                            placeholder="qtd"
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => {
+                              const v = parseInt(e.target.value)
+                              setAdvDiscCounts(prev => {
+                                const next = new Map(prev)
+                                if (!isNaN(v) && v > 0) next.set(d.id, v)
+                                else next.delete(d.id)
+                                return next
+                              })
+                            }}
+                            className="w-14 rounded border border-primary/40 bg-background px-2 py-1 text-sm text-center mx-1"
+                          />
+                        )}
                         <button
                           onClick={() => setExpandedDisc(isExpanded ? null : d.id)}
                           className="p-2 text-muted-foreground hover:text-foreground"
@@ -813,24 +901,26 @@ export function Simulado() {
               </div>
             </div>
 
-            {/* Count */}
-            <div>
-              <h2 className="font-semibold mb-2">Número de questões</h2>
-              <div className="flex gap-2 flex-wrap">
-                {[10, 20, 30, 50].filter(n => n <= advPool.length).concat(advPool.length > 50 ? [advPool.length] : []).map(n => (
-                  <button
-                    key={n}
-                    onClick={() => setAdvQuestionCount(n)}
-                    className={cn(
-                      'rounded-lg border px-4 py-2 text-sm font-medium transition-all',
-                      advQuestionCount === n ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/50'
-                    )}
-                  >
-                    {n === advPool.length && n > 50 ? `Todas (${n})` : n}
-                  </button>
-                ))}
+            {/* Count — only shown when no disciplines selected (all-mode) */}
+            {advDiscs.size === 0 && (
+              <div>
+                <h2 className="font-semibold mb-2">Número de questões</h2>
+                <div className="flex gap-2 flex-wrap">
+                  {[10, 20, 30, 50].filter(n => n <= advPool.length).concat(advPool.length > 50 ? [advPool.length] : []).map(n => (
+                    <button
+                      key={n}
+                      onClick={() => setAdvQuestionCount(n)}
+                      className={cn(
+                        'rounded-lg border px-4 py-2 text-sm font-medium transition-all',
+                        advQuestionCount === n ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-primary/50'
+                      )}
+                    >
+                      {n === advPool.length && n > 50 ? `Todas (${n})` : n}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Time */}
             <div>
@@ -859,8 +949,20 @@ export function Simulado() {
                 disabled={!canStartAdv}
                 className="rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
               >
-                Iniciar Simulado Avançado — {Math.min(advQuestionCount, advPool.length)} questões
-                {advTimeMinutes > 0 ? ` · ${advTimeMinutes} min` : ''}
+                {(() => {
+                  let total: number
+                  if (advDiscs.size === 0) {
+                    total = Math.min(advQuestionCount, advPool.length)
+                  } else {
+                    total = [...advDiscs].reduce((acc, discId) => {
+                      let discQs = allQuestions.filter(q => q.discipline_id === discId)
+                      if (advSubjects.size > 0) discQs = discQs.filter(q => advSubjects.has(q.subject_id))
+                      const target = advDiscCounts.get(discId) ?? discQs.length
+                      return acc + Math.min(target, discQs.length)
+                    }, 0)
+                  }
+                  return `Iniciar Simulado Avançado — ${total} questões${advTimeMinutes > 0 ? ` · ${advTimeMinutes} min` : ''}`
+                })()}
               </button>
             )}
           </div>
