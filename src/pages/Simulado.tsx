@@ -428,7 +428,7 @@ export function Simulado() {
                       )}
                     >
                       {currentQuestion.type !== 'true_false' && <span className={cn('font-bold shrink-0', isElim && 'line-through')}>{opt.letter}.</span>}
-                      <span className={cn(isElim && 'line-through')}>{opt.text}</span>
+                      <span className={cn(isElim && 'line-through')} dangerouslySetInnerHTML={{ __html: opt.text }} />
                     </button>
                     {showScissors && (
                       <button

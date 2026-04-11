@@ -416,12 +416,12 @@ export function Admin() {
       pendingHtml = []
     }
 
-    // Remove o marcador "A) " do primeiro nó de texto do elemento clonado
+    // Remove o marcador "A) " / "A. " / "A " do primeiro nó de texto do clone
     function stripLeadingMarker(el: Element) {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
       const first = walker.nextNode()
       if (first?.textContent) {
-        first.textContent = first.textContent.replace(/^[A-Ea-e][.)]\s*/, '')
+        first.textContent = first.textContent.replace(/^[A-Ea-e](?:[.)]\s*|\s+)/, '')
       }
     }
 
@@ -429,8 +429,24 @@ export function Admin() {
       const plain = (block.textContent ?? '').trim()
       if (!plain) continue
 
-      // Formato inline: A) texto  ou  A. texto
-      const inlineMatch = plain.match(/^([A-Ea-e])[.)]\s+(.+)/)
+      // Marcador embutido em bold/strong sem separador: <strong>A</strong><i>texto</i>
+      const firstEl = block.firstElementChild
+      if (firstEl && ['b', 'strong'].includes(firstEl.tagName.toLowerCase())) {
+        const markerText = (firstEl.textContent ?? '').trim()
+        if (/^[A-Ea-e][.)]{0,1}$/.test(markerText)) {
+          flushPending()
+          const clone = block.cloneNode(true) as Element
+          clone.firstElementChild!.remove()
+          matched.push({
+            letter: markerText[0].toUpperCase(),
+            text: extractEmphasisFromHtml(clone.innerHTML).trim(),
+          })
+          continue
+        }
+      }
+
+      // Formato inline: A) texto, A. texto, A texto, A)texto (sem espaço)
+      const inlineMatch = plain.match(/^([A-Ea-e])(?:[.)]\s*|\s+)(.+)/)
       if (inlineMatch) {
         flushPending()
         const clone = block.cloneNode(true) as Element

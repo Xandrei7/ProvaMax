@@ -137,7 +137,7 @@ function ReviewCard({ question, authorizedCorrectAnswer, index, total, onAnswer 
               className={cls}
             >
               {question.type !== 'true_false' && <span className="font-bold shrink-0">{opt.letter}.</span>}
-              <span>{opt.text}</span>
+              <span dangerouslySetInnerHTML={{ __html: opt.text }} />
               {submitted && isCorrectOpt && <CheckCircle2 size={15} className="text-green-500 shrink-0 ml-auto" />}
               {submitted && isSelected && !isCorrectOpt && <XCircle size={15} className="text-red-500 shrink-0 ml-auto" />}
             </button>
