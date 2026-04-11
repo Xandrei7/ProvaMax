@@ -524,24 +524,31 @@ export async function getProfiles(): Promise<Profile[]> {
   return (data as Profile[]) ?? []
 }
 
-export async function getUserActivityCounts(): Promise<Record<string, { today: number; week: number }>> {
+export async function getUserActivityCounts(): Promise<Record<string, { today: number; week: number; month: number; total: number }>> {
   const now = new Date()
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
-  const weekStart  = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString()
+  const todayStart  = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+  const weekStart   = new Date(now.getTime() -  6 * 24 * 60 * 60 * 1000).toISOString()
+  const monthStart  = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString()
 
   const { data, error } = await supabase
-    .from('user_answers')
-    .select('user_id, answered_at')
-    .gte('answered_at', weekStart)
+    .from('question_activity_log')
+    .select('user_id, logged_at')
 
-  if (error) throw error
+  if (error) {
+    // Tabela ainda não existe (migração pendente) — retorna vazio silenciosamente
+    console.warn('[getUserActivityCounts] question_activity_log indisponível:', error.message)
+    return {}
+  }
 
-  const result: Record<string, { today: number; week: number }> = {}
+  const result: Record<string, { today: number; week: number; month: number; total: number }> = {}
   for (const row of (data ?? [])) {
     const uid = row.user_id as string
-    if (!result[uid]) result[uid] = { today: 0, week: 0 }
-    result[uid].week++
-    if ((row.answered_at as string) >= todayStart) result[uid].today++
+    if (!result[uid]) result[uid] = { today: 0, week: 0, month: 0, total: 0 }
+    const ts = row.logged_at as string
+    result[uid].total++
+    if (ts >= monthStart) result[uid].month++
+    if (ts >= weekStart)  result[uid].week++
+    if (ts >= todayStart) result[uid].today++
   }
   return result
 }

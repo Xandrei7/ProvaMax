@@ -21,7 +21,7 @@ export function Admin() {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [questions, setQuestions] = useState<Question[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
-  const [activityCounts, setActivityCounts] = useState<Record<string, { today: number; week: number }>>({})
+  const [activityCounts, setActivityCounts] = useState<Record<string, { today: number; week: number; month: number; total: number }>>({})
   const [reports, setReports] = useState<{id:string;question_id:string;user_id:string;message:string;created_at:string}[]>([])
 
   // Forms
@@ -884,14 +884,19 @@ export function Admin() {
                       <p className="text-xs text-muted-foreground">Solicitou acesso em: {formatDateTime(p.requested_access_at)}</p>
                       {(() => {
                         const ac = activityCounts[p.user_id]
-                        if (!ac && !(p.user_id in activityCounts)) return null
                         const t = ac?.today ?? 0
-                        const w = ac?.week ?? 0
+                        const w = ac?.week  ?? 0
+                        const m = ac?.month ?? 0
+                        const total = ac?.total ?? 0
                         return (
                           <p className="mt-0.5 text-xs text-muted-foreground">
                             Hoje <span className="font-semibold text-foreground">{t}</span>
                             <span className="mx-1 opacity-40">•</span>
-                            Semana <span className="font-semibold text-foreground">{w}</span>
+                            7d <span className="font-semibold text-foreground">{w}</span>
+                            <span className="mx-1 opacity-40">•</span>
+                            30d <span className="font-semibold text-foreground">{m}</span>
+                            <span className="mx-1 opacity-40">•</span>
+                            Total <span className="font-semibold text-foreground">{total}</span>
                           </p>
                         )
                       })()}

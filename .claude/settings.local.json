@@ -27,7 +27,11 @@
       "Bash(vercel --version)",
       "Bash(node_modules/.bin/tsc --noEmit)",
       "Bash(node -e \"console.log\\('node works'\\)\")",
-      "Bash(node_modules/.bin/vite build:*)"
+      "Bash(node_modules/.bin/vite build:*)",
+      "Bash(npm install:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\gustavo\\Desktop\\meu-app-questoes\\src\\assets",

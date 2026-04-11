@@ -81,6 +81,15 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     if (error) {
       console.error('[StudyContext] Erro ao salvar resposta:', error.message)
     }
+
+    // Log de monitoramento admin (fire-and-forget — não bloqueia, não afeta progresso)
+    supabase.from('question_activity_log').insert({
+      user_id: user.id,
+      question_id: answer.questionId,
+      logged_at: answer.answeredAt,
+    }).then(({ error: logErr }) => {
+      if (logErr) console.warn('[monitoring] Falha ao registrar atividade:', logErr.message)
+    })
   }
 
   // ── Reset por IDs ─────────────────────────────────────────────────────────
