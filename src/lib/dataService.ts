@@ -524,6 +524,28 @@ export async function getProfiles(): Promise<Profile[]> {
   return (data as Profile[]) ?? []
 }
 
+export async function getUserActivityCounts(): Promise<Record<string, { today: number; week: number }>> {
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+  const weekStart  = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString()
+
+  const { data, error } = await supabase
+    .from('user_answers')
+    .select('user_id, answered_at')
+    .gte('answered_at', weekStart)
+
+  if (error) throw error
+
+  const result: Record<string, { today: number; week: number }> = {}
+  for (const row of (data ?? [])) {
+    const uid = row.user_id as string
+    if (!result[uid]) result[uid] = { today: 0, week: 0 }
+    result[uid].week++
+    if ((row.answered_at as string) >= todayStart) result[uid].today++
+  }
+  return result
+}
+
 export async function updateUserStatus(userId: string, newStatus: UserStatus) {
   const now = new Date().toISOString()
 
