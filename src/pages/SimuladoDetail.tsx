@@ -434,7 +434,7 @@ export function SimuladoDetail() {
         <div>
           <div className="flex items-center gap-2 mb-3">
             <h2 className="font-semibold flex-1">Questões erradas</h2>
-            <span className="text-sm text-muted-foreground">{wrongSimQs.length} questão{wrongSimQs.length !== 1 ? 'ões' : ''}</span>
+            <span className="text-sm text-muted-foreground">{wrongSimQs.length} {wrongSimQs.length === 1 ? 'questão' : 'questões'}</span>
           </div>
 
           {wrongSimQs.length === 0 ? (
@@ -458,8 +458,8 @@ export function SimuladoDetail() {
                         {idx + 1}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <p
-                          className="text-sm line-clamp-3 leading-relaxed"
+                        <div
+                          className="text-sm leading-relaxed space-y-2 [&_p]:mb-2 last:[&_p]:mb-0"
                           dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(q.statement) }}
                         />
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2">
@@ -483,8 +483,8 @@ export function SimuladoDetail() {
                             <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                               Comentário
                             </p>
-                            <p
-                              className="text-xs leading-relaxed line-clamp-3 text-muted-foreground"
+                            <div
+                              className="text-xs leading-relaxed text-muted-foreground space-y-2 [&_p]:mb-2 last:[&_p]:mb-0"
                               dangerouslySetInnerHTML={{ __html: sanitizeRichTextForRender(q.comment, true) }}
                             />
                           </div>
