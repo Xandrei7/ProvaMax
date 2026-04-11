@@ -31,7 +31,8 @@
       "Bash(npm install:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(grep -rn \"answeredAt\\\\|UserAnswer\" src/types* src/lib/types*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\gustavo\\Desktop\\meu-app-questoes\\src\\assets",
