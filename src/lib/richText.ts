@@ -22,6 +22,29 @@ export function extractEmphasisFromHtml(html: string, preserveColor = false): st
   const parser = new DOMParser()
   const doc = parser.parseFromString(html, 'text/html')
 
+  /**
+   * Retorna true somente para cores que o autor aplicou explicitamente.
+   * Preto (rgb(0,0,0) / #000 / black) e valores CSS padrão são ignorados
+   * porque editores como OneNote/Word os serializam mesmo em texto normal.
+   */
+  function isRealColor(c: string): boolean {
+    if (!c) return false
+    const n = c.replace(/\s/g, '').toLowerCase()
+    return !(
+      n === '' ||
+      n === 'rgb(0,0,0)' ||
+      n === 'rgba(0,0,0,1)' ||
+      n === '#000000' ||
+      n === '#000' ||
+      n === 'black' ||
+      n === 'windowtext' ||        // cor padrão do Word
+      n === 'inherit' ||
+      n === 'initial' ||
+      n === 'unset' ||
+      n === 'currentcolor'
+    )
+  }
+
   function walk(node: Node): string {
     // Nó de texto: devolve o conteúdo literal
     if (node.nodeType === Node.TEXT_NODE) {
@@ -67,8 +90,9 @@ export function extractEmphasisFromHtml(html: string, preserveColor = false): st
       td.includes('underline') ||
       tdl.includes('underline')
 
-    // ── Detectar cor (apenas quando preserveColor = true) ────────────────────
-    const color = preserveColor ? (style?.color ?? '') : ''
+    // ── Detectar cor (apenas quando preserveColor = true e é cor real) ──────
+    const rawColor = style?.color ?? ''
+    const color = (preserveColor && isRealColor(rawColor)) ? rawColor : ''
 
     // Aplica as tags de ênfase (somente quando o conteúdo não é vazio)
     let result = inner
