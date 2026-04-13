@@ -324,14 +324,21 @@ export function Admin() {
 
   function applyAltPasteBlock(rawText: string) {
     if (!qForm) return
-    
-    // Normalização inicial para Mobile (Causa: falta de quebras de linha ou caracteres exóticos)
-    const text = rawText
+
+    let text = rawText
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
       // Adiciona quebra de linha antes de letras de alternativas se estiverem coladas em texto
       .replace(/([^\n\s])([a-eA-E][.)]\s)/g, '$1\n$2')
       .trim()
+      
+    // --- CAMADA ADITIVA MOBILE ISOLADA (Alternativas colapsadas) ---
+    // Detecta padrão: AtextoBtexto... (sem pontuação e sem quebra)
+    const isCollapsed = /[A-E][a-z\u00C0-\u00FF]{2,}.*?[B-E][a-z\u00C0-\u00FF]{2,}/.test(text)
+    if (isCollapsed) {
+      text = text.replace(/([A-E])([a-z\u00C0-\u00FF]{2,})/g, '\n$1) $2')
+    }
+    // ---------------------------------------------------------------
 
     const lines = text.split('\n')
     const matched: { letter: string; text: string }[] = []

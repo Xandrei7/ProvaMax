@@ -41,10 +41,23 @@ export function Import() {
     const currentRawText = textareaRef.current?.value || rawText
     if (!currentRawText.trim()) return toast.error('Cole as questões no campo de texto.')
 
-    // Normalização agressiva para mobile (Causa Raiz: falta de quebras de linha em colagens mobile)
-    const normalizedText = currentRawText
-      .replace(/\r\n/g, '\n') // Normaliza quebras de linha
+    // Normalização inicial para Mobile (Causa: falta de quebras de linha ou caracteres exóticos)
+    let text = currentRawText
+      .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
+      // Adiciona quebra de linha antes de letras de alternativas se estiverem coladas em texto
+      .replace(/([^\n\s])([a-eA-E][.)]\s)/g, '$1\n$2')
+      .trim()
+      
+    // --- CAMADA ADITIVA MOBILE ISOLADA (Alternativas colapsadas) ---
+    const isCollapsed = /[A-E][a-z\u00C0-\u00FF]{2,}.*?[B-E][a-z\u00C0-\u00FF]{2,}/.test(text)
+    if (isCollapsed) {
+      text = text.replace(/([A-E])([a-z\u00C0-\u00FF]{2,})/g, '\n$1) $2')
+    }
+    // ---------------------------------------------------------------
+
+    // Normalização agressiva para mobile (Causa Raiz: falta de quebras de linha em colagens mobile)
+    const finalNormalizedText = text
       .replace(/\n{2,}/g, '\n\n') // Reduz excessos
       .replace(/(\n|^)([ \t]+)(\d+[.)]\s+)/g, '$1$3') // Remove espaços antes de números
       // Caso o texto não tenha NENHUMA quebra de linha (colagem compacta mobile)
@@ -56,7 +69,7 @@ export function Import() {
       // Garante que as alternativas (a, b, c, d, e) tenham quebra antes
       .replace(/([^\n\s])([a-eA-E]\)\s)/g, '$1\n$2')
 
-    const questions = parseQuestionsText(normalizedText)
+    const questions = parseQuestionsText(finalNormalizedText)
 
     if (questions.length === 0) {
       return toast.error(
