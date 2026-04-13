@@ -171,7 +171,8 @@ function parseQuestionBlock(text: string): {
     .map(l => l.trim())
     .filter(l => l.length > 0)
 
-  const optionPattern = /^([a-eA-E])\)\s*(.+)/
+  // Permite espaços em branco antes da letra da alternativa (comum no mobile)
+  const optionPattern = /^[ \t]*([a-eA-E])\)\s*(.+)/
 
   const firstOptIdx = lines.findIndex(l => optionPattern.test(l))
 
@@ -211,8 +212,8 @@ function parseQuestionBlock(text: string): {
 
 function parseGabaritoSection(text: string): Record<number, { letter: string; comment: string }> {
   // Matches "1. C" (sozinho) ou "1. C Comentário..." (mesma linha).
-  // \b garante que a letra é isolada. Tolerante a espaços no início da linha.
-  const answerLineRegex = /(?:^|\n)[ \t]*(\d+)[.)]\s+([A-Ea-e])\b/g
+  // \b garante que a letra é isolada. Tolerante a múltiplos espaços e quebras.
+  const answerLineRegex = /(?:^|\n)[ \t]*(\d+)[.)]\s*([A-Ea-e])\b/g
   const matches = [...text.matchAll(answerLineRegex)]
 
   const map: Record<number, { letter: string; comment: string }> = {}
