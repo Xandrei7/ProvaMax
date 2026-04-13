@@ -116,6 +116,31 @@ function parseQuestionsSection(
     matches = allMatches.slice(firstRealIdx)
   }
 
+  // ── Filtro de sequência estrita (PC / importação em lote) ─────────────────
+  // Questões de prova são sempre numeradas sequencialmente (1, 2, 3 … N).
+  // Números incorporados dentro de um enunciado (ex: "Art. 3. O servidor…")
+  // passam no filtro anterior porque o bloco calculado sobre allMatches fica
+  // deformado e parece conter alternativas. Este filtro adicional rejeita
+  // qualquer match cujo número não seja exatamente o próximo da sequência,
+  // eliminando os falsos positivos sem alterar nada mais.
+  {
+    const seq: RegExpMatchArray[] = []
+    let expected = -1
+    for (const m of matches) {
+      const n = parseInt(m[1])
+      if (expected === -1) {
+        seq.push(m)
+        expected = n + 1
+      } else if (n === expected) {
+        seq.push(m)
+        expected = n + 1
+      }
+      // n != expected → número fora de sequência → falso positivo, ignora
+    }
+    // Só aplica se o filtro sequencial manteve pelo menos um match
+    if (seq.length > 0) matches = seq
+  }
+
   // ── Contexto inicial: texto antes da primeira questão real ─────────────────
   const firstRealPos = matches[0].index ?? 0
   let currentContext = detectAssociatedText(text.slice(0, firstRealPos))
