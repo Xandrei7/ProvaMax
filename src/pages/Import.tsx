@@ -15,6 +15,8 @@ export function Import() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [disciplineName, setDisciplineName] = useState('')
   const [subjectName, setSubjectName] = useState('')
+  const [rawText, setRawText] = useState('')
+  const [parsed, setParsed] = useState<ParsedQuestion[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [isMobile, setIsMobile] = useState(false)
@@ -120,7 +122,7 @@ export function Import() {
       }
 
       // 3. Insert questions
-      const rows = parsed.map((q, i) => ({
+      const rows = parsed.map((q: ParsedQuestion, i: number) => ({
         statement: q.statement,
         type: q.type,
         options: q.type === 'multiple_choice' ? q.options : null,
@@ -277,7 +279,7 @@ export function Import() {
 
             {/* Preview list */}
             <div className="flex flex-col gap-2">
-              {parsed.map((q, i) => (
+              {parsed.map((q: ParsedQuestion, i: number) => (
                 <div key={i} className="rounded-xl border border-border bg-card overflow-hidden">
                   <button
                     onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
@@ -333,17 +335,14 @@ export function Import() {
                       {q.options && q.options.length > 0 && (
                         <div>
                           <p className="text-xs font-semibold text-muted-foreground mb-1">ALTERNATIVAS</p>
-                          <div className="flex flex-col gap-1">
-                            {q.options.map(opt => (
+                          <div className="flex flex-col gap-1.5 mt-2 ml-1 border-l-2 border-primary/20 pl-3">
+                            {q.options.map((opt: { letter: string; text: string }) => (
                               <div key={opt.letter} className={cn(
-                                'rounded-md px-3 py-1.5 text-sm',
-                                opt.letter === q.correctAnswer
-                                  ? 'bg-green-50 text-green-700 font-medium dark:bg-green-950/30 dark:text-green-400'
-                                  : 'bg-muted/50'
+                                'text-sm',
+                                opt.letter === q.correctAnswer ? 'text-green-600 font-semibold' : 'text-muted-foreground'
                               )}>
-                                <span className="font-bold mr-2">{opt.letter}.</span>
-                              <span dangerouslySetInnerHTML={{ __html: opt.text }} />
-                                {opt.letter === q.correctAnswer && ' ✓'}
+                                <span className="font-bold mr-1">{opt.letter})</span>
+                                <span dangerouslySetInnerHTML={{ __html: opt.text }} />
                               </div>
                             ))}
                           </div>
