@@ -61,7 +61,7 @@ function detectAssociatedText(block: string): string | null {
   if (paragraphs.length >= 2) return trimmed
 
   // Sinal 3: passagem única com substância (artigo, trecho, citação)
-  if (trimmed.length > 80) return trimmed
+  if (trimmed.length > 60) return trimmed
 
   return null
 }
@@ -131,10 +131,24 @@ function parseQuestionsSection(
     const blockEnd   = nextMatch?.index ?? text.length
     const blockText  = text.slice(blockStart, blockEnd)
 
-    const { statement, options, trailingText } = parseQuestionBlock(blockText)
+    const { statement, options, trailingText: rawTrailing } = parseQuestionBlock(blockText)
+    let finalStatement = statement
 
     // Ignora blocos sem enunciado (falso positivo de número solto)
-    if (!statement.trim()) continue
+    if (!finalStatement.trim()) continue
+
+    // ── Resolução de Trailing Text (Texto após alternativa E) ──────────────────
+    // Se o texto após as alternativas for identificado como um novo "Texto Associado"
+    // (ex: "Considere o texto abaixo para as questões..."), ele muda o contexto global.
+    // Caso contrário, ele é anexado ao corpo desta questão (regra do usuário).
+    if (rawTrailing) {
+      const newContext = detectAssociatedText(rawTrailing)
+      if (newContext) {
+        currentContext = newContext
+      } else {
+        finalStatement += '<br/><br/>' + rawTrailing.replace(/\n/g, ' ')
+      }
+    }
 
     const isTrueFalse =
       options.length === 0 ||
@@ -143,19 +157,11 @@ function parseQuestionsSection(
 
     results.push({
       number,
-      statement,
+      statement:      finalStatement.replace(/\s+/g, ' ').trim(),
       type:           isTrueFalse ? 'true_false' : 'multiple_choice',
       options:        isTrueFalse ? null : options,
       associatedText: currentContext,
     })
-
-    // ── Contexto inter-questões ────────────────────────────────────────────
-    // Se houver texto substancial após as alternativas desta questão,
-    // ele se torna o novo contexto para as questões seguintes.
-    if (trailingText) {
-      const newContext = detectAssociatedText(trailingText)
-      if (newContext) currentContext = newContext
-    }
   }
 
   return results
@@ -204,10 +210,25 @@ function parseQuestionBlock(text: string): {
     })
     .filter(Boolean) as ParsedOption[]
 
-  const statement    = statementLines.join(' ').replace(/\s+/g, ' ').trim()
+  // --- TRATAMENTO DE METADADO (Banca, Órgão, Ano) ---
+  let statement = ''
+  if (statementLines.length > 0) {
+    const firstLine = statementLines[0]
+    // Identifica se a primeira linha é o metadado (ex: "(FCC ...)" ou "(Questão ...)")
+    if (firstLine.startsWith('(') && firstLine.includes(')')) {
+      statement = `<strong>${firstLine}</strong><br/>` + statementLines.slice(1).join(' ')
+    } else {
+      statement = statementLines.join(' ')
+    }
+  }
+
   const trailingText = trailingLines.join('\n').trim() || null
 
-  return { statement, options, trailingText }
+  return { 
+    statement: statement.replace(/\s+/g, ' ').trim(), 
+    options, 
+    trailingText 
+  }
 }
 
 function parseGabaritoSection(text: string): Record<number, { letter: string; comment: string }> {
