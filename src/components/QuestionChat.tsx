@@ -62,10 +62,10 @@ export function QuestionChat({ question }: QuestionChatProps) {
             explanation: question.comment || '',
             options: question.options || []
           },
-          // Attempt to extract discipline/subject if available in question object
-          // They might not be directly in the question depending on the query, but we pass what we can
-          discipline: (question as any).discipline_name || 'Direito Constitucional', // Fallback as ALE-RR is mostly DC in this context
-          subject: (question as any).subject_name || ''
+          discipline: (question as any).discipline_name || '',
+          subject: (question as any).subject_name || '',
+          disciplineId: question.discipline_id,
+          subjectId: question.subject_id
         })
       })
 

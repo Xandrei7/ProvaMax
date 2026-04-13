@@ -322,8 +322,17 @@ export function Admin() {
     } catch { toast.error('Erro ao criar assunto.') }
   }
 
-  function applyAltPasteBlock(text: string) {
+  function applyAltPasteBlock(rawText: string) {
     if (!qForm) return
+    
+    // Normalização inicial para Mobile (Causa: falta de quebras de linha ou caracteres exóticos)
+    const text = rawText
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      // Adiciona quebra de linha antes de letras de alternativas se estiverem coladas em texto
+      .replace(/([^\n\s])([a-eA-E][.)]\s)/g, '$1\n$2')
+      .trim()
+
     const lines = text.split('\n')
     const matched: { letter: string; text: string }[] = []
 
@@ -498,7 +507,12 @@ export function Admin() {
             const html = e.clipboardData.getData('text/html')
             if (!html) return
             e.preventDefault()
-            setQForm(f => f ? {...f, statement: extractEmphasisFromHtml(html)} : f)
+            const sanitized = extractEmphasisFromHtml(html)
+            const target = e.target as HTMLTextAreaElement
+            const start = target.selectionStart
+            const end = target.selectionEnd
+            const current = qForm.statement
+            setQForm(f => f ? {...f, statement: current.substring(0, start) + sanitized + current.substring(end)} : f)
           }}
           placeholder="Enunciado *"
           rows={3}
@@ -586,7 +600,12 @@ export function Admin() {
             const html = e.clipboardData.getData('text/html')
             if (!html) return
             e.preventDefault()
-            setQForm(f => f ? {...f, comment: extractEmphasisFromHtml(html, true)} : f)
+            const sanitized = extractEmphasisFromHtml(html, true)
+            const target = e.target as HTMLTextAreaElement
+            const start = target.selectionStart
+            const end = target.selectionEnd
+            const current = qForm.comment
+            setQForm(f => f ? {...f, comment: current.substring(0, start) + sanitized + current.substring(end)} : f)
           }}
           placeholder="Comentário / explicação *"
           rows={3}

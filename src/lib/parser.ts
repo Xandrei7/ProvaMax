@@ -81,7 +81,9 @@ function parseQuestionsSection(
   text: string,
   validNumbers: Set<number> = new Set(),
 ) {
-  const questionStartRegex = /^(\d+)[.)]\s*/gm
+  // Regex mais tolerante: aceita início de linha ou quebra de linha, 
+  // com ou sem espaços antes do número.
+  const questionStartRegex = /(?:^|\n)[ \t]*(\d+)[.)]\s+/g
   const allMatches = [...text.matchAll(questionStartRegex)]
 
   if (allMatches.length === 0) return []
@@ -209,8 +211,8 @@ function parseQuestionBlock(text: string): {
 
 function parseGabaritoSection(text: string): Record<number, { letter: string; comment: string }> {
   // Matches "1. C" (sozinho) ou "1. C Comentário..." (mesma linha).
-  // \b garante que a letra é isolada — não casa "1. Cada..." (C seguido de 'a').
-  const answerLineRegex = /^[ \t]*(\d+)[.)]\s+([A-Ea-e])\b/gm
+  // \b garante que a letra é isolada. Tolerante a espaços no início da linha.
+  const answerLineRegex = /(?:^|\n)[ \t]*(\d+)[.)]\s+([A-Ea-e])\b/g
   const matches = [...text.matchAll(answerLineRegex)]
 
   const map: Record<number, { letter: string; comment: string }> = {}

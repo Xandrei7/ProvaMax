@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ChevronRight, CheckCircle2, Upload, ChevronLeft } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
 import { BottomNav } from '@/components/BottomNav'
+import { RankingSection } from '@/components/RankingSection'
 import { ProgressBar } from '@/components/ProgressBar'
 import { getDisciplines, getSubjects, getQuestions } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
@@ -361,6 +362,9 @@ export function Home() {
                 )
               })
             )}
+
+            {/* Ranking dos usuários — visível na vista inicial */}
+            <RankingSection />
           </div>
         )}
       </main>

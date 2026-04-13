@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Upload, CheckCircle2, XCircle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import { Header } from '@/components/Header'
@@ -15,10 +15,17 @@ export function Import() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [disciplineName, setDisciplineName] = useState('')
   const [subjectName, setSubjectName] = useState('')
-  const [rawText, setRawText] = useState('')
-  const [parsed, setParsed] = useState<ParsedQuestion[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const [isMobile, setIsMobile] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768)
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
 
   useEffect(() => {
     getDisciplines().then(setDisciplines)
@@ -27,9 +34,27 @@ export function Import() {
   function handleParse() {
     if (!disciplineName.trim()) return toast.error('Informe o nome da Matéria.')
     if (!subjectName.trim()) return toast.error('Informe o nome do Assunto.')
-    if (!rawText.trim()) return toast.error('Cole as questões no campo de texto.')
+    
+    // Captura o valor diretamente do Ref (DOM) para garantir valor real no Mobile
+    const currentRawText = textareaRef.current?.value || rawText
+    if (!currentRawText.trim()) return toast.error('Cole as questões no campo de texto.')
 
-    const questions = parseQuestionsText(rawText)
+    // Normalização agressiva para mobile (Causa Raiz: falta de quebras de linha em colagens mobile)
+    const normalizedText = currentRawText
+      .replace(/\r\n/g, '\n') // Normaliza quebras de linha
+      .replace(/\r/g, '\n')
+      .replace(/\n{2,}/g, '\n\n') // Reduz excessos
+      .replace(/(\n|^)([ \t]+)(\d+[.)]\s+)/g, '$1$3') // Remove espaços antes de números
+      // Caso o texto não tenha NENHUMA quebra de linha (colagem compacta mobile)
+      // Tenta inserir quebras antes de números de questão:
+      .replace(/([^ \n])(\d+[.)]\s+[A-Z])/g, '$1\n$2')
+      // Garante que o Gabarito esteja isolado
+      .replace(/([^\n])(GABARITO\s*COMENTADO)/i, '$1\n\n$2')
+      .replace(/(GABARITO\s*COMENTADO)([^\n])/i, '$1\n\n$2')
+      // Garante que as alternativas (a, b, c, d, e) tenham quebra antes
+      .replace(/([^\n\s])([a-eA-E]\)\s)/g, '$1\n$2')
+
+    const questions = parseQuestionsText(normalizedText)
 
     if (questions.length === 0) {
       return toast.error(
@@ -124,10 +149,36 @@ export function Import() {
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const html = e.clipboardData.getData('text/html')
-    if (!html) return // sem HTML → deixa o paste padrão acontecer
+    if (!html) {
+      // No mobile, muitas vezes só temos o plain text.
+      // Deixamos o evento padrão (onChange) lidar com isso para não quebrar o comportamento do teclado.
+      return
+    }
+
+    // Se temos HTML (comum vindo do QConcursos no Desktop ou alguns browsers mobile),
+    // processamos para manter o negrito/itálico.
     e.preventDefault()
     const sanitized = extractEmphasisFromHtml(html)
-    setRawText(prev => prev + sanitized)
+    
+    // Inserção inteligente: tenta inserir na posição do cursor
+    const target = e.target as HTMLTextAreaElement
+    const start = target.selectionStart
+    const end = target.selectionEnd
+    const currentText = rawText
+    const newText = currentText.substring(0, start) + sanitized + currentText.substring(end)
+    
+    setRawText(newText)
+    
+    // Feedback visual para o usuário
+    toast.info('Texto formatado inserido com sucesso!')
+  }
+
+  function handleClear() {
+    if (!rawText) return
+    if (window.confirm('Limpar todo o texto colado?')) {
+      setRawText('')
+      setParsed(null)
+    }
   }
 
   function reset() {
@@ -174,18 +225,32 @@ export function Import() {
             </div>
 
             <div className="rounded-xl border border-border bg-card p-4">
-              <p className="text-sm font-semibold mb-1">2. Cole aqui as questões + gabarito comentado</p>
+              <div className="flex justify-between items-center mb-1">
+                <p className="text-sm font-semibold">2. Cole aqui as questões + gabarito</p>
+                {rawText && (
+                  <button 
+                    onClick={handleClear}
+                    className="text-xs text-red-500 hover:text-red-600 font-medium"
+                  >
+                    Limpar texto
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground mb-3">
-                Formato esperado: questões numeradas com alternativas a) b) c)... seguidas de{' '}
-                <strong>GABARITO COMENTADO</strong> com as respostas e explicações.
+                No celular, você pode colar normalmente o conteúdo do QConcursos.
               </p>
               <textarea
+                ref={textareaRef}
                 value={rawText}
                 onChange={e => setRawText(e.target.value)}
                 onPaste={handlePaste}
-                rows={16}
-                placeholder={`1.\n\nEnunciado da primeira questão...\n\na) alternativa A\nb) alternativa B\nc) alternativa C\nd) alternativa D\ne) alternativa E\n\n2.\n\nEnunciado da segunda questão...\n\na) ...\n\nGABARITO COMENTADO\n1. C\n\nComentário explicando a resposta...\n\n2. A\n\nComentário explicando a resposta...`}
-                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+                rows={isMobile ? 12 : 16}
+                placeholder={`Cole o conteúdo aqui...\n\nExemplo:\n1. Enunciado\na) Opção\n...\nGABARITO COMENTADO\n1. A\nExplicação...`}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary min-h-[300px]"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck="false"
               />
             </div>
 

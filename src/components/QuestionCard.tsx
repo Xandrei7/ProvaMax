@@ -6,6 +6,7 @@ import { submitReport } from '@/lib/dataService'
 import { sanitizeRichTextForRender } from '@/lib/richText'
 import { toast } from 'sonner'
 import type { Question } from '@/types'
+import { QuestionChat } from './QuestionChat'
 
 interface QuestionCardProps {
   question: Question
@@ -287,6 +288,11 @@ export function QuestionCard({
                   <span><strong>Dica:</strong> {question.exam_tips}</span>
                 </div>
               )}
+              
+              {/* Chat da Questão */}
+              <div className="mt-2">
+                <QuestionChat question={question} />
+              </div>
             </div>
           )}
         </div>

@@ -32,7 +32,20 @@
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
       "Bash(git push:*)",
-      "Bash(grep -rn \"answeredAt\\\\|UserAnswer\" src/types* src/lib/types*)"
+      "Bash(grep -rn \"answeredAt\\\\|UserAnswer\" src/types* src/lib/types*)",
+      "Bash(bash -c \"cd '/c/Users/gustavo/Desktop/ProvaMax' && npx tsc --noEmit 2>&1\")",
+      "Bash(bash -c \"cd 'c:/Users/gustavo/Desktop/ProvaMax' && npx tsc --noEmit\")",
+      "Bash(cmd /c \"cd c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit 2>&1\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit 2>&1 && echo OK\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit && echo BUILD_OK\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit > tsc_out.txt 2>&1 && type tsc_out.txt && echo TSC_DONE\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit > c:\\\\tsc_out.txt 2>&1\")",
+      "Read(//c//**)",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit > c:\\\\tsc2.txt 2>&1 & type c:\\\\tsc2.txt 2>nul && echo TSC_OK\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit > c:\\\\tsc_diag.txt 2>&1 & type c:\\\\tsc_diag.txt 2>nul && echo TSC_OK_OR_EMPTY\")",
+      "Bash(cmd /c \"cd /d c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax && npx tsc --noEmit > c:\\\\tsc3.txt 2>&1 & type c:\\\\tsc3.txt 2>nul && echo DONE\")",
+      "Bash(ls -la /c/Users/gustavo/Desktop/ProvaMax/*.sql)"
     ],
     "additionalDirectories": [
       "C:\\Users\\gustavo\\Desktop\\meu-app-questoes\\src\\assets",
