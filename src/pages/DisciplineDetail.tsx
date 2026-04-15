@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ChevronRight, CheckCircle2, Shuffle } from 'lucide-react'
+import { ChevronRight, CheckCircle2, Shuffle, BookOpen, Layers } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { ProgressBar } from '@/components/ProgressBar'
-import { getDisciplines, getSubjects, getQuestions } from '@/lib/dataService'
+import { getDisciplines, getSubjects, getSubjectParts, getQuestions } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
-import type { Discipline, Subject, Question } from '@/types'
+import type { Discipline, Subject, SubjectPart, Question } from '@/types'
+
+type DisciplineTab = 'questions' | 'theories'
 
 export function DisciplineDetail() {
   const { disciplineId } = useParams<{ disciplineId: string }>()
@@ -15,19 +17,33 @@ export function DisciplineDetail() {
   const [discipline, setDiscipline] = useState<Discipline | null>(null)
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [questions, setQuestions] = useState<Question[]>([])
+  // map de subjectId → partes (para saber se tem partes ou não)
+  const [partsBySubject, setPartsBySubject] = useState<Record<string, SubjectPart[]>>({})
   const [loading, setLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<DisciplineTab>('questions')
 
   useEffect(() => {
     if (!disciplineId) return
     async function load() {
-      const [disciplines, subs, qs] = await Promise.all([
+      const [disciplines, subs, qs, allParts] = await Promise.all([
         getDisciplines(),
         getSubjects(disciplineId),
         getQuestions({ disciplineId }),
+        getSubjectParts(),
       ])
       setDiscipline(disciplines.find(d => d.id === disciplineId) ?? null)
       setSubjects(subs)
       setQuestions(qs)
+
+      // Agrupa partes por subject_id (apenas para os assuntos dessa matéria)
+      const subIds = new Set(subs.map(s => s.id))
+      const grouped: Record<string, SubjectPart[]> = {}
+      for (const part of allParts) {
+        if (!subIds.has(part.subject_id)) continue
+        if (!grouped[part.subject_id]) grouped[part.subject_id] = []
+        grouped[part.subject_id].push(part)
+      }
+      setPartsBySubject(grouped)
       setLoading(false)
     }
     load()
@@ -39,13 +55,63 @@ export function DisciplineDetail() {
     return { answered, total: qIds.length }
   }
 
+  function handleSubjectClick(subject: Subject) {
+    const hasParts = (partsBySubject[subject.id]?.length ?? 0) > 0
+    if (hasParts) {
+      navigate(`/subject/${subject.id}/parts`)
+    } else {
+      navigate(`/study/${subject.id}`)
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <Header title={discipline?.name ?? '...'} showBack />
       <main className="mx-auto w-full max-w-lg flex-1 px-4 py-4 pb-24">
+        {/* Tab selector */}
+        <div className="flex gap-1 mb-4 rounded-lg border border-border bg-muted/30 p-1">
+          <button
+            onClick={() => setActiveTab('questions')}
+            className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${activeTab === 'questions' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            Questões
+          </button>
+          <button
+            onClick={() => setActiveTab('theories')}
+            className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${activeTab === 'theories' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            Teoria
+          </button>
+        </div>
+
+        {/* Aviso de atualização — apenas na aba Teoria */}
+        {activeTab === 'theories' && (
+          <p className="mb-3 text-center text-xs font-semibold tracking-widest text-muted-foreground uppercase">
+            EM ATUALIZAÇÃO
+          </p>
+        )}
+
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          </div>
+        ) : activeTab === 'theories' ? (
+          <div className="flex flex-col gap-3">
+            {subjects.length === 0 ? (
+              <p className="py-8 text-center text-muted-foreground">Nenhum assunto cadastrado.</p>
+            ) : (
+              subjects.map(subject => (
+                <button
+                  key={subject.id}
+                  onClick={() => navigate(`/theory/${subject.id}`)}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-4 text-left hover:border-primary hover:shadow-sm transition-all"
+                >
+                  <BookOpen size={16} className="text-primary shrink-0" />
+                  <span className="font-medium flex-1 truncate">{subject.name}</span>
+                  <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+                </button>
+              ))
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -67,16 +133,23 @@ export function DisciplineDetail() {
               subjects.map(subject => {
                 const { answered, total } = getProgress(subject.id)
                 const complete = total > 0 && answered === total
+                const hasParts = (partsBySubject[subject.id]?.length ?? 0) > 0
                 return (
                   <button
                     key={subject.id}
-                    onClick={() => navigate(`/study/${subject.id}`)}
+                    onClick={() => handleSubjectClick(subject)}
                     className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-4 text-left hover:border-primary hover:shadow-sm transition-all"
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-medium truncate">{subject.name}</span>
                         {complete && <CheckCircle2 size={15} className="text-green-500 shrink-0" />}
+                        {hasParts && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground shrink-0">
+                            <Layers size={10} />
+                            {partsBySubject[subject.id].length} partes
+                          </span>
+                        )}
                       </div>
                       <ProgressBar value={answered} max={total} showLabel />
                     </div>

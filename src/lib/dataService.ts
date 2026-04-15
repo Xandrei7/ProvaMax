@@ -1,6 +1,7 @@
 import type { User } from '@supabase/supabase-js'
 import { supabase } from './supabase'
-import type { Discipline, Subject, Question, Profile, SimuladoRecord, SimuladoQuestion, Flashcard } from '@/types'
+import { getActivityWindowBounds } from './activityWindow'
+import type { Discipline, Subject, SubjectPart, Question, Profile, SimuladoRecord, SimuladoQuestion, Flashcard } from '@/types'
 
 export const ADMIN_EMAIL = 'alexandregoncalvespmrr@gmail.com'
 
@@ -465,21 +466,64 @@ export async function deleteSubject(id: string) {
   if (error) throw error
 }
 
-// -- QUESTIONS ----------------------------------------------------------------
+// -- SUBJECT PARTS ------------------------------------------------------------
 
-export async function getQuestions(filter?: { subjectId?: string; disciplineId?: string }): Promise<Question[]> {
-  let query = supabase
-    .from('questions')
-    .select('*')
-    .order('sort_order', { ascending: true, nullsFirst: false })
-    .order('created_at', { ascending: true })
-
-  if (filter?.subjectId) query = query.eq('subject_id', filter.subjectId)
-  if (filter?.disciplineId) query = query.eq('discipline_id', filter.disciplineId)
-
+export async function getSubjectParts(subjectId?: string): Promise<SubjectPart[]> {
+  let query = supabase.from('subject_parts').select('*').order('sort_order').order('name')
+  if (subjectId) query = query.eq('subject_id', subjectId)
   const { data, error } = await query
   if (error) throw error
   return data ?? []
+}
+
+export async function saveSubjectPart(part: Partial<SubjectPart> & { name: string; subject_id: string }) {
+  if (part.id) {
+    const { error } = await supabase
+      .from('subject_parts')
+      .update({ name: part.name, subject_id: part.subject_id, sort_order: part.sort_order ?? 0 })
+      .eq('id', part.id)
+    if (error) throw error
+    return
+  }
+  const { error } = await supabase
+    .from('subject_parts')
+    .insert({ name: part.name, subject_id: part.subject_id, sort_order: part.sort_order ?? 0 })
+  if (error) throw error
+}
+
+export async function deleteSubjectPart(id: string) {
+  const { error } = await supabase.from('subject_parts').delete().eq('id', id)
+  if (error) throw error
+}
+
+// -- QUESTIONS ----------------------------------------------------------------
+
+export async function getQuestions(filter?: { subjectId?: string; disciplineId?: string; partId?: string }): Promise<Question[]> {
+  const PAGE_SIZE = 1000
+  const rows: Question[] = []
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const to = from + PAGE_SIZE - 1
+    let query = supabase
+      .from('questions')
+      .select('*')
+      .order('sort_order', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true })
+
+    if (filter?.subjectId) query = query.eq('subject_id', filter.subjectId)
+    if (filter?.disciplineId) query = query.eq('discipline_id', filter.disciplineId)
+    if (filter?.partId) query = query.eq('part_id', filter.partId)
+
+    const { data, error } = await query.range(from, to)
+    if (error) throw error
+
+    const page = (data ?? []) as Question[]
+    rows.push(...page)
+
+    if (page.length < PAGE_SIZE) break
+  }
+
+  return rows
 }
 
 export async function saveQuestion(question: Partial<Question> & { statement: string; subject_id: string; discipline_id: string }) {
@@ -492,6 +536,8 @@ export async function saveQuestion(question: Partial<Question> & { statement: st
     legal_basis: question.legal_basis ?? null,
     exam_tips: question.exam_tips ?? null,
     associated_text: question.associated_text ?? null,
+    specific_link: question.specific_link ?? null,
+    part_id: question.part_id ?? null,
     subject_id: question.subject_id,
     discipline_id: question.discipline_id,
     sort_order: question.sort_order ?? 0,
@@ -525,10 +571,7 @@ export async function getProfiles(): Promise<Profile[]> {
 }
 
 export async function getUserActivityCounts(): Promise<Record<string, { today: number; week: number; month: number; total: number }>> {
-  const now = new Date()
-  const todayStart  = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
-  const weekStart   = new Date(now.getTime() -  6 * 24 * 60 * 60 * 1000).toISOString()
-  const monthStart  = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString()
+  const { todayStartIso, nextDayStartIso, weekStartIso, monthStartIso } = getActivityWindowBounds()
 
   const { data, error } = await supabase
     .from('question_activity_log')
@@ -547,9 +590,9 @@ export async function getUserActivityCounts(): Promise<Record<string, { today: n
     if (!result[uid]) result[uid] = { today: 0, week: 0, month: 0, total: 0 }
     const ts = row.logged_at as string
     result[uid].total++
-    if (ts >= monthStart) result[uid].month++
-    if (ts >= weekStart)  result[uid].week++
-    if (ts >= todayStart) result[uid].today++
+    if (ts >= monthStartIso) result[uid].month++
+    if (ts >= weekStartIso)  result[uid].week++
+    if (ts >= todayStartIso && ts < nextDayStartIso) result[uid].today++
   }
   return result
 }
@@ -1032,4 +1075,3 @@ export async function reviewFlashcard(id: string, action: FlashcardReviewAction,
 export async function updateFlashcardReview(id: string, isCorrect: boolean, userId: string): Promise<Flashcard> {
   return reviewFlashcard(id, isCorrect ? 'correct' : 'wrong', userId)
 }
-

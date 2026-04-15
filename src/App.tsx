@@ -17,6 +17,8 @@ import { Admin } from '@/pages/Admin'
 import { Import } from '@/pages/Import'
 import { Simulado } from '@/pages/Simulado'
 import { SimuladoDetail } from '@/pages/SimuladoDetail'
+import { TheoryView } from '@/pages/TheoryView'
+import { SubjectParts } from '@/pages/SubjectParts'
 import { NotFound } from '@/pages/NotFound'
 
 function Spinner() {
@@ -67,9 +69,12 @@ function AppRoutes() {
       <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
       <Route path="/disciplines" element={<ProtectedRoute><Home /></ProtectedRoute>} />
       <Route path="/discipline/:disciplineId" element={<ProtectedRoute><DisciplineDetail /></ProtectedRoute>} />
+      <Route path="/subject/:subjectId/parts" element={<ProtectedRoute><SubjectParts /></ProtectedRoute>} />
       <Route path="/study/:subjectId" element={<ProtectedRoute><StudyMode /></ProtectedRoute>} />
+      <Route path="/study/:subjectId/part/:partId" element={<ProtectedRoute><StudyMode /></ProtectedRoute>} />
       <Route path="/study/:subjectId/complete" element={<ProtectedRoute><StudyComplete /></ProtectedRoute>} />
       <Route path="/study-discipline/:disciplineId" element={<ProtectedRoute><StudyMode /></ProtectedRoute>} />
+      <Route path="/theory/:subjectId" element={<ProtectedRoute><TheoryView /></ProtectedRoute>} />
       <Route path="/flashcards" element={<ProtectedRoute><Flashcards /></ProtectedRoute>} />
       <Route path="/favorites" element={<Navigate to="/flashcards" replace />} />
       <Route path="/errors" element={<ProtectedRoute><Errors /></ProtectedRoute>} />

@@ -1,36 +1,62 @@
-import { useEffect, useState } from 'react'
-import { extractEmphasisFromHtml } from '@/lib/richText'
-import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { extractEmphasisFromHtml, sanitizeTheoryHtml } from '@/lib/richText'
+import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search, ChevronUp, ChevronDown, Layers } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Header } from '@/components/Header'
 import {
   getDisciplines, saveDiscipline, deleteDiscipline,
   getSubjects, saveSubject, deleteSubject,
+  getSubjectParts, saveSubjectPart, deleteSubjectPart,
   getQuestions, saveQuestion, deleteQuestion,
   getProfiles, updateUserStatus, getReports, ADMIN_EMAIL, normalizeEmail, getUserActivityCounts,
 } from '@/lib/dataService'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import type { Discipline, Subject, Question, Profile, QuestionType } from '@/types'
+import type { Discipline, Subject, SubjectPart, Question, Profile, QuestionType, Theory } from '@/types'
+import { getAllTheories, createTheory, updateTheory, deleteTheory } from '@/lib/theoryService'
 
-type Tab = 'disciplines' | 'subjects' | 'questions' | 'users' | 'reports'
+type Tab = 'disciplines' | 'subjects' | 'parts' | 'questions' | 'users' | 'reports' | 'theories'
 
 export function Admin() {
   const [activeTab, setActiveTab] = useState<Tab>('disciplines')
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
+  const [parts, setParts] = useState<SubjectPart[]>([])
   const [questions, setQuestions] = useState<Question[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [activityCounts, setActivityCounts] = useState<Record<string, { today: number; week: number; month: number; total: number }>>({})
   const [reports, setReports] = useState<{id:string;question_id:string;user_id:string;message:string;created_at:string}[]>([])
+  const [theories, setTheories] = useState<Theory[]>([])
+  const [tFilterDisc, setTFilterDisc] = useState('')
+  const [tFilterSub, setTFilterSub] = useState('')
+  const [tForm, setTForm] = useState<{
+    id?: string; discipline_id: string; subject_id: string; title: string; content_html: string
+    youtube_url: string; complementary_text: string
+  } | null>(null)
+  const tTextareaRef = useRef<HTMLTextAreaElement>(null)
+
+  function wrapSelectionWithMark() {
+    const el = tTextareaRef.current
+    if (!el || !tForm) return
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    if (start === end) { toast.error('Selecione um trecho no textarea primeiro'); return }
+    const current = tForm.content_html
+    const newText = current.substring(0, start) + `<mark>${current.substring(start, end)}</mark>` + current.substring(end)
+    setTForm({ ...tForm, content_html: newText })
+  }
 
   // Forms
   const [discForm, setDiscForm] = useState<{ id?: string; name: string; icon: string; group_name: string } | null>(null)
   const [subForm, setSubForm] = useState<{ id?: string; name: string; discipline_id: string; sort_order: string } | null>(null)
+  const [partForm, setPartForm] = useState<{ id?: string; name: string; subject_id: string; sort_order: string } | null>(null)
+  const [partFilterDisc, setPartFilterDisc] = useState('')
+  const [partFilterSub, setPartFilterSub] = useState('')
   // ── Questions tab: filters / sort / selection ─────────────────────────────
   const [qSearch, setQSearch] = useState('')
   const [qFilterDisc, setQFilterDisc] = useState('')
   const [qFilterSubject, setQFilterSubject] = useState('')
+  const [qFilterPart, setQFilterPart] = useState('')
   const [qFilterType, setQFilterType] = useState<'' | QuestionType>('')
   const [qSort, setQSort] = useState<'recent' | 'discipline' | 'subject' | 'order'>('recent')
   const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set())
@@ -39,11 +65,20 @@ export function Admin() {
   const [inlineSubName, setInlineSubName] = useState('')
 
   const [qForm, setQForm] = useState<{
-    id?: string; discipline_id: string; subject_id: string;
+    id?: string; discipline_id: string; subject_id: string; part_id: string;
     type: QuestionType; statement: string; options: {letter:string;text:string}[];
     correct_answer: string; comment: string; legal_basis: string; exam_tips: string; sort_order: string;
-    associated_text: string;
+    associated_text: string; specific_link: string;
   } | null>(null)
+  const qCommentRef = useRef<HTMLTextAreaElement>(null)
+
+  function autoResizeMobileTextarea(el: HTMLTextAreaElement) {
+    if (typeof window === 'undefined') return
+    if (window.matchMedia('(min-width: 768px)').matches) return
+    el.style.height = 'auto'
+    const nextHeight = Math.min(Math.max(el.scrollHeight, 120), 520)
+    el.style.height = `${nextHeight}px`
+  }
 
   function formatDateTime(value?: string | null) {
     if (!value) return '-'
@@ -71,11 +106,51 @@ export function Admin() {
   }
 
   const loadAll = async () => {
-    const [d, s, q, p, r, ac] = await Promise.all([getDisciplines(), getSubjects(), getQuestions(), getProfiles(), getReports(), getUserActivityCounts()])
-    setDisciplines(d); setSubjects(s); setQuestions(q); setProfiles(p); setReports(r); setActivityCounts(ac)
+    const [d, s, pts, q, p, r, ac] = await Promise.all([getDisciplines(), getSubjects(), getSubjectParts(), getQuestions(), getProfiles(), getReports(), getUserActivityCounts()])
+    setDisciplines(d); setSubjects(s); setParts(pts); setQuestions(q); setProfiles(p); setReports(r); setActivityCounts(ac)
   }
 
   useEffect(() => { loadAll() }, [])
+  useEffect(() => { if (activeTab === 'theories') loadTheories() }, [activeTab])
+  useEffect(() => {
+    if (!qForm) return
+    if (!qCommentRef.current) return
+    autoResizeMobileTextarea(qCommentRef.current)
+  }, [qForm?.id])
+
+  async function loadTheories() {
+    const th = await getAllTheories()
+    setTheories(th)
+  }
+
+  async function handleSaveTheory() {
+    if (!tForm?.title.trim() || !tForm.subject_id || !tForm.discipline_id) return toast.error('Preencha todos os campos obrigatórios')
+    try {
+      const theoryPayload = {
+        discipline_id: tForm.discipline_id,
+        subject_id: tForm.subject_id,
+        title: tForm.title,
+        content_html: tForm.content_html,
+        youtube_url: tForm.youtube_url.trim() || null,
+        complementary_text: tForm.complementary_text.trim() || null,
+      }
+      if (tForm.id) {
+        await updateTheory(tForm.id, theoryPayload)
+        toast.success('Teoria atualizada!')
+      } else {
+        await createTheory(theoryPayload)
+        toast.success('Teoria criada!')
+      }
+      setTForm(null)
+      await loadTheories()
+    } catch (err) { console.error('[Theory save error]', err); toast.error('Erro ao salvar teoria.') }
+  }
+
+  async function handleDeleteTheory(id: string) {
+    if (!confirm('Excluir esta teoria?')) return
+    try { await deleteTheory(id); toast.success('Teoria excluída.'); await loadTheories() }
+    catch { toast.error('Erro ao excluir teoria.') }
+  }
 
   // ── Disciplines ────────────────────────────────────────────────────────────
   async function handleSaveDisc() {
@@ -109,9 +184,25 @@ export function Admin() {
     catch { toast.error('Erro ao excluir assunto.') }
   }
 
+  // ── Parts ──────────────────────────────────────────────────────────────────
+  async function handleSavePart() {
+    if (!partForm?.name.trim() || !partForm.subject_id) return toast.error('Preencha todos os campos obrigatórios')
+    try {
+      await saveSubjectPart({ id: partForm.id, name: partForm.name, subject_id: partForm.subject_id, sort_order: Number(partForm.sort_order) || 0 })
+      toast.success(partForm.id ? 'Parte atualizada!' : 'Parte criada!')
+      setPartForm(null); await loadAll()
+    } catch { toast.error('Erro ao salvar parte.') }
+  }
+
+  async function handleDeletePart(id: string) {
+    if (!confirm('Excluir esta parte? As questões vinculadas ficam sem parte (assunto geral).')) return
+    try { await deleteSubjectPart(id); toast.success('Parte excluída.'); await loadAll() }
+    catch { toast.error('Erro ao excluir parte.') }
+  }
+
   // ── Questions ──────────────────────────────────────────────────────────────
   function newQForm(): typeof qForm {
-    return { discipline_id: qFilterDisc, subject_id: qFilterSubject, type: 'multiple_choice', statement: '', options: [{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}], correct_answer: 'A', comment: '', legal_basis: '', exam_tips: '', sort_order: '0', associated_text: '' }
+    return { discipline_id: qFilterDisc, subject_id: qFilterSubject, part_id: '', type: 'multiple_choice', statement: '', options: [{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}], correct_answer: 'A', comment: '', legal_basis: '', exam_tips: '', sort_order: '0', associated_text: '', specific_link: '' }
   }
 
   function addOption() {
@@ -130,8 +221,10 @@ export function Admin() {
         correct_answer: qForm.correct_answer, comment: qForm.comment,
         legal_basis: qForm.legal_basis || null, exam_tips: qForm.exam_tips || null,
         subject_id: qForm.subject_id, discipline_id: qForm.discipline_id,
+        part_id: qForm.part_id || null,
         sort_order: Number(qForm.sort_order) || 0,
         associated_text: qForm.associated_text || null,
+        specific_link: qForm.specific_link.trim() || null,
       })
       toast.success(qForm.id ? 'Questão atualizada!' : 'Questão criada!')
       setQForm(null); setShowInlineSub(false); setInlineSubName(''); await loadAll()
@@ -149,11 +242,16 @@ export function Admin() {
     ? subjects.filter(s => s.discipline_id === qFilterDisc)
     : subjects
 
+  const partsForQFilter = qFilterSubject
+    ? parts.filter(p => p.subject_id === qFilterSubject)
+    : []
+
   const filteredQuestions = (() => {
     const term = qSearch.trim().toLowerCase()
     let result = questions.filter(q => {
       if (qFilterDisc && q.discipline_id !== qFilterDisc) return false
       if (qFilterSubject && q.subject_id !== qFilterSubject) return false
+      if (qFilterPart && q.part_id !== qFilterPart) return false
       if (qFilterType && q.type !== qFilterType) return false
       if (term) {
         const disc = disciplines.find(d => d.id === q.discipline_id)
@@ -209,6 +307,18 @@ export function Admin() {
       if (next.has(id)) next.delete(id); else next.add(id)
       return next
     })
+  }
+
+  async function deleteSelectedQuestions() {
+    if (!confirm(`Excluir ${selectedQIds.size} questão(ões) selecionada(s)? Esta ação não pode ser desfeita.`)) return
+    try {
+      await Promise.all([...selectedQIds].map(id => deleteQuestion(id)))
+      toast.success(`${selectedQIds.size} questão(ões) excluída(s).`)
+      setSelectedQIds(new Set())
+      await loadAll()
+    } catch {
+      toast.error('Erro ao excluir questões selecionadas.')
+    }
   }
 
   function copySelectedToClipboard() {
@@ -467,7 +577,7 @@ export function Admin() {
             value={showInlineSub ? '__new__' : qForm.subject_id}
             onChange={e => {
               if (e.target.value === '__new__') { setShowInlineSub(true) }
-              else { setShowInlineSub(false); setQForm({...qForm, subject_id: e.target.value}) }
+              else { setShowInlineSub(false); setQForm({...qForm, subject_id: e.target.value, part_id: ''}) }
             }}
             className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           >
@@ -490,6 +600,25 @@ export function Admin() {
             </div>
           )}
         </div>
+        {qForm.subject_id && parts.filter(p => p.subject_id === qForm.subject_id).length > 0 && (
+          <select
+            value={qForm.part_id}
+            onChange={e => setQForm({...qForm, part_id: e.target.value})}
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            <option value="">Sem parte (assunto geral)</option>
+            {parts.filter(p => p.subject_id === qForm.subject_id).map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        )}
+        <input
+          value={qForm.specific_link}
+          onChange={e => setQForm({...qForm, specific_link: e.target.value})}
+          placeholder="Link específico da questão (opcional) — ex: vídeo, mapa mental, artigo..."
+          type="url"
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
         <select value={qForm.type} onChange={e => setQForm({...qForm, type: e.target.value as QuestionType, correct_answer: e.target.value === 'true_false' ? 'C' : 'A'})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
           <option value="true_false">Certo / Errado</option>
           <option value="multiple_choice">Múltipla Escolha</option>
@@ -505,7 +634,7 @@ export function Admin() {
           }}
           placeholder="Texto associado (opcional)"
           rows={3}
-          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-y md:resize-none focus:outline-none focus:ring-2 focus:ring-primary"
         />
         <textarea
           value={qForm.statement}
@@ -523,7 +652,7 @@ export function Admin() {
           }}
           placeholder="Enunciado *"
           rows={3}
-          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-y md:resize-none focus:outline-none focus:ring-2 focus:ring-primary"
         />
         {qForm.type === 'multiple_choice' && (
           <div className="flex flex-col gap-2">
@@ -558,7 +687,7 @@ export function Admin() {
               <textarea
                 placeholder={"A) alternativa\nB) alternativa\nC) alternativa"}
                 rows={3}
-                className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm resize-y md:resize-none focus:outline-none focus:ring-2 focus:ring-primary"
                 onPaste={e => {
                   e.preventDefault()
                   const types = Array.from(e.clipboardData.types)
@@ -601,8 +730,10 @@ export function Admin() {
           )}
         </div>
         <textarea
+          ref={qCommentRef}
           value={qForm.comment}
           onChange={e => setQForm({...qForm, comment: e.target.value})}
+          onInput={e => autoResizeMobileTextarea(e.currentTarget)}
           onPaste={e => {
             const html = e.clipboardData.getData('text/html')
             if (!html) return
@@ -616,7 +747,7 @@ export function Admin() {
           }}
           placeholder="Comentário / explicação *"
           rows={3}
-          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-y md:resize-none focus:outline-none focus:ring-2 focus:ring-primary"
         />
         <input value={qForm.legal_basis} onChange={e => setQForm({...qForm, legal_basis: e.target.value})} placeholder="Fundamento Legal (opcional)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
         <input value={qForm.exam_tips} onChange={e => setQForm({...qForm, exam_tips: e.target.value})} placeholder="Dica de prova (opcional)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
@@ -631,7 +762,9 @@ export function Admin() {
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'disciplines', label: 'Matérias', icon: <BookOpen size={16}/> },
     { id: 'subjects', label: 'Assuntos', icon: <FileText size={16}/> },
+    { id: 'parts', label: 'Partes', icon: <Layers size={16}/> },
     { id: 'questions', label: 'Questões', icon: <AlertTriangle size={16}/> },
+    { id: 'theories', label: 'Teorias', icon: <BookOpen size={16}/> },
     { id: 'users', label: 'Usuários', icon: <Users size={16}/> },
     { id: 'reports', label: 'Reportes', icon: <AlertTriangle size={16}/> },
   ]
@@ -745,6 +878,78 @@ export function Admin() {
           </div>
         )}
 
+        {/* ── PARTS ── */}
+        {activeTab === 'parts' && (
+          <div className="flex flex-col gap-4">
+            <div className="flex justify-between items-center">
+              <h2 className="font-semibold">Partes ({parts.length})</h2>
+              <button onClick={() => setPartForm({ name: '', subject_id: '', sort_order: '0' })} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+                <Plus size={14}/>Nova Parte
+              </button>
+            </div>
+            {partForm && (
+              <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
+                <h3 className="font-medium">{partForm.id ? 'Editar' : 'Nova'} Parte</h3>
+                <input value={partForm.name} onChange={e => setPartForm({...partForm, name: e.target.value})} placeholder="Nome da parte *" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+                <select value={partFilterDisc} onChange={e => { setPartFilterDisc(e.target.value); setPartForm({...partForm, subject_id: ''}) }} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option value="">Filtrar por matéria (opcional)</option>
+                  {disciplines.map(d => <option key={d.id} value={d.id}>{d.icon} {d.name}</option>)}
+                </select>
+                <select value={partForm.subject_id} onChange={e => setPartForm({...partForm, subject_id: e.target.value})} className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option value="">Selecione o assunto *</option>
+                  {(partFilterDisc ? subjects.filter(s => s.discipline_id === partFilterDisc) : subjects).map(s => {
+                    const disc = disciplines.find(d => d.id === s.discipline_id)
+                    return <option key={s.id} value={s.id}>{disc?.icon} {disc?.name} › {s.name}</option>
+                  })}
+                </select>
+                <input type="number" value={partForm.sort_order} onChange={e => setPartForm({...partForm, sort_order: e.target.value})} placeholder="Ordem (número)" className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"/>
+                <div className="flex gap-2">
+                  <button onClick={handleSavePart} className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">Salvar</button>
+                  <button onClick={() => { setPartForm(null); setPartFilterDisc('') }} className="text-sm text-muted-foreground hover:text-foreground">Cancelar</button>
+                </div>
+              </div>
+            )}
+            {/* Filtros */}
+            <div className="flex gap-2">
+              <select value={partFilterDisc} onChange={e => { setPartFilterDisc(e.target.value); setPartFilterSub('') }} className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                <option value="">Todas as matérias</option>
+                {disciplines.map(d => <option key={d.id} value={d.id}>{d.icon} {d.name}</option>)}
+              </select>
+              <select value={partFilterSub} onChange={e => setPartFilterSub(e.target.value)} className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                <option value="">Todos os assuntos</option>
+                {(partFilterDisc ? subjects.filter(s => s.discipline_id === partFilterDisc) : subjects).map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-2">
+              {parts
+                .filter(p => {
+                  const sub = subjects.find(s => s.id === p.subject_id)
+                  if (partFilterSub && p.subject_id !== partFilterSub) return false
+                  if (partFilterDisc && sub?.discipline_id !== partFilterDisc) return false
+                  return true
+                })
+                .map(p => {
+                  const sub = subjects.find(s => s.id === p.subject_id)
+                  const disc = disciplines.find(d => d.id === sub?.discipline_id)
+                  return (
+                    <div key={p.id} className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+                      <Layers size={14} className="text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{p.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{disc?.icon} {disc?.name} › {sub?.name}</p>
+                      </div>
+                      <button onClick={() => { setPartFilterDisc(sub?.discipline_id ?? ''); setPartForm({id:p.id, name:p.name, subject_id:p.subject_id, sort_order:String(p.sort_order)}) }} className="p-1.5 text-muted-foreground hover:text-foreground"><Pencil size={15}/></button>
+                      <button onClick={() => handleDeletePart(p.id)} className="p-1.5 text-muted-foreground hover:text-red-500"><Trash2 size={15}/></button>
+                    </div>
+                  )
+                })}
+              {parts.length === 0 && <p className="py-8 text-center text-muted-foreground">Nenhuma parte cadastrada.</p>}
+            </div>
+          </div>
+        )}
+
         {/* ── QUESTIONS ── */}
         {activeTab === 'questions' && (
           <div className="flex flex-col gap-4">
@@ -770,7 +975,7 @@ export function Admin() {
               <div className="flex flex-wrap gap-2">
                 <select
                   value={qFilterDisc}
-                  onChange={e => { setQFilterDisc(e.target.value); setQFilterSubject('') }}
+                  onChange={e => { setQFilterDisc(e.target.value); setQFilterSubject(''); setQFilterPart('') }}
                   className="flex-1 min-w-[140px] rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Todas as matérias</option>
@@ -778,12 +983,22 @@ export function Admin() {
                 </select>
                 <select
                   value={qFilterSubject}
-                  onChange={e => setQFilterSubject(e.target.value)}
+                  onChange={e => { setQFilterSubject(e.target.value); setQFilterPart('') }}
                   className="flex-1 min-w-[140px] rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Todos os assuntos</option>
                   {subjectsForQFilter.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
+                {partsForQFilter.length > 0 && (
+                  <select
+                    value={qFilterPart}
+                    onChange={e => setQFilterPart(e.target.value)}
+                    className="flex-1 min-w-[140px] rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Todas as partes</option>
+                    {partsForQFilter.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
                 <select
                   value={qFilterType}
                   onChange={e => setQFilterType(e.target.value as '' | QuestionType)}
@@ -846,12 +1061,21 @@ export function Admin() {
                   </>
                 )}
                 {selectedQIds.size > 0 && (
-                  <button
-                    onClick={copySelectedToClipboard}
-                    className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
-                  >
-                    Copiar selecionadas
-                  </button>
+                  <>
+                    <button
+                      onClick={copySelectedToClipboard}
+                      className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
+                    >
+                      Copiar selecionadas
+                    </button>
+                    <button
+                      onClick={() => void deleteSelectedQuestions()}
+                      className="flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30 transition-colors"
+                    >
+                      <Trash2 size={12} />
+                      Excluir selecionadas
+                    </button>
+                  </>
                 )}
               </div>
             )}
@@ -908,11 +1132,11 @@ export function Admin() {
                         <button onClick={() => {
                           setShowInlineSub(false); setInlineSubName('')
                           setQForm({
-                            id: q.id, discipline_id: q.discipline_id, subject_id: q.subject_id,
+                            id: q.id, discipline_id: q.discipline_id, subject_id: q.subject_id, part_id: q.part_id ?? '',
                             type: q.type, statement: q.statement, options: q.options ?? [{letter:'A',text:''},{letter:'B',text:''},{letter:'C',text:''}],
                             correct_answer: q.correct_answer, comment: q.comment,
                             legal_basis: q.legal_basis ?? '', exam_tips: q.exam_tips ?? '', sort_order: String(q.sort_order),
-                            associated_text: q.associated_text ?? ''
+                            associated_text: q.associated_text ?? '', specific_link: q.specific_link ?? ''
                           })
                         }} className="p-1 text-muted-foreground hover:text-foreground"><Pencil size={14}/></button>
                         <button onClick={() => handleDeleteQ(q.id)} className="p-1 text-muted-foreground hover:text-red-500"><Trash2 size={14}/></button>
@@ -1092,6 +1316,168 @@ export function Admin() {
             </div>
           </div>
         )}
+
+        {/* ── THEORIES ── */}
+        {activeTab === 'theories' && (() => {
+          const tSubjects = tFilterDisc ? subjects.filter(s => s.discipline_id === tFilterDisc) : subjects
+          const filteredTheories = theories.filter(t =>
+            (!tFilterDisc || t.discipline_id === tFilterDisc) &&
+            (!tFilterSub || t.subject_id === tFilterSub)
+          )
+          return (
+            <div className="flex flex-col gap-4">
+              <div className="flex justify-between items-center">
+                <h2 className="font-semibold">Teorias ({filteredTheories.length})</h2>
+                <button
+                  onClick={() => setTForm({ discipline_id: tFilterDisc, subject_id: tFilterSub, title: '', content_html: '', youtube_url: '', complementary_text: '' })}
+                  className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  <Plus size={14}/>Nova Teoria
+                </button>
+              </div>
+
+              {/* Filters */}
+              <div className="flex gap-2 flex-wrap">
+                <select
+                  value={tFilterDisc}
+                  onChange={e => { setTFilterDisc(e.target.value); setTFilterSub('') }}
+                  className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Todas as matérias</option>
+                  {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+                <select
+                  value={tFilterSub}
+                  onChange={e => setTFilterSub(e.target.value)}
+                  className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Todos os assuntos</option>
+                  {tSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+
+              {/* Form */}
+              {tForm && (
+                <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
+                  <h3 className="font-medium">{tForm.id ? 'Editar' : 'Nova'} Teoria</h3>
+                  <select
+                    value={tForm.discipline_id}
+                    onChange={e => setTForm({ ...tForm, discipline_id: e.target.value, subject_id: '' })}
+                    className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Selecione a matéria *</option>
+                    {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                  <select
+                    value={tForm.subject_id}
+                    onChange={e => setTForm({ ...tForm, subject_id: e.target.value })}
+                    className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Selecione o assunto *</option>
+                    {subjects.filter(s => !tForm.discipline_id || s.discipline_id === tForm.discipline_id).map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={tForm.title}
+                    onChange={e => setTForm({ ...tForm, title: e.target.value })}
+                    placeholder="Título *"
+                    className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <div className="flex flex-col gap-1">
+                    <textarea
+                      ref={tTextareaRef}
+                      value={tForm.content_html}
+                      onChange={e => setTForm({ ...tForm, content_html: e.target.value })}
+                      onPaste={e => {
+                        const html = e.clipboardData.getData('text/html')
+                        if (!html) return
+                        e.preventDefault()
+                        const cleaned = sanitizeTheoryHtml(html)
+                        const target = e.target as HTMLTextAreaElement
+                        const start = target.selectionStart
+                        const end = target.selectionEnd
+                        const current = tForm.content_html
+                        setTForm(f => f ? { ...f, content_html: current.substring(0, start) + cleaned + current.substring(end) } : f)
+                      }}
+                      placeholder="Conteúdo HTML (suporta <b>, <u>, <mark>, <p>, <ul>, <li>)"
+                      rows={10}
+                      className="rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary resize-y"
+                    />
+                    <button
+                      type="button"
+                      onClick={wrapSelectionWithMark}
+                      className="self-start rounded-md border border-border bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-800 hover:bg-yellow-100 transition-colors"
+                    >
+                      Marcar texto
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground font-medium">Link do YouTube</label>
+                    <input
+                      value={tForm.youtube_url}
+                      onChange={e => setTForm({ ...tForm, youtube_url: e.target.value })}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-muted-foreground font-medium">Texto complementar</label>
+                    <textarea
+                      value={tForm.complementary_text}
+                      onChange={e => setTForm({ ...tForm, complementary_text: e.target.value })}
+                      placeholder="Observações, referências ou dicas adicionais..."
+                      rows={3}
+                      className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-y"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={handleSaveTheory} className="flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+                      <Check size={14}/>Salvar
+                    </button>
+                    <button onClick={() => setTForm(null)} className="text-sm text-muted-foreground hover:text-foreground">Cancelar</button>
+                  </div>
+                </div>
+              )}
+
+              {/* List */}
+              {filteredTheories.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8 text-sm">Nenhuma teoria encontrada.</p>
+              ) : (
+                filteredTheories.map(t => {
+                  const disc = disciplines.find(d => d.id === t.discipline_id)
+                  const sub = subjects.find(s => s.id === t.subject_id)
+                  return (
+                    <div key={t.id} className="rounded-xl border border-border bg-card p-4 flex flex-col gap-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm truncate">{t.title}</p>
+                          <p className="text-xs text-muted-foreground">{disc?.name} › {sub?.name}</p>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() => setTForm({ id: t.id, discipline_id: t.discipline_id, subject_id: t.subject_id, title: t.title, content_html: t.content_html, youtube_url: t.youtube_url ?? '', complementary_text: t.complementary_text ?? '' })}
+                            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                            title="Editar"
+                          >
+                            <Pencil size={14}/>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTheory(t.id)}
+                            className="p-1.5 rounded-md hover:bg-red-50 text-muted-foreground hover:text-red-500"
+                            title="Excluir"
+                          >
+                            <Trash2 size={14}/>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          )
+        })()}
 
         {/* ── REPORTS ── */}
         {activeTab === 'reports' && (

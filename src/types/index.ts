@@ -14,6 +14,14 @@ export interface Subject {
   created_at: string
 }
 
+export interface SubjectPart {
+  id: string
+  name: string
+  subject_id: string
+  sort_order: number
+  created_at: string
+}
+
 export interface QuestionOption {
   letter: string
   text: string
@@ -31,6 +39,8 @@ export interface Question {
   legal_basis: string | null
   exam_tips: string | null
   associated_text: string | null
+  specific_link: string | null
+  part_id: string | null
   subject_id: string
   discipline_id: string
   sort_order: number
@@ -102,6 +112,18 @@ export interface SimuladoQuestion {
   is_correct: boolean
   discipline_id: string
   subject_id: string
+}
+
+export interface Theory {
+  id: string
+  discipline_id: string
+  subject_id: string
+  title: string
+  content_html: string
+  youtube_url?: string | null
+  complementary_text?: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface Flashcard {

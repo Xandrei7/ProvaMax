@@ -100,11 +100,7 @@ export function QuestionChat({ question }: QuestionChatProps) {
       </div>
 
       <div className="p-4 flex flex-col gap-3 max-h-[300px] overflow-y-auto bg-muted/20">
-        {messages.length === 0 ? (
-          <p className="text-xs text-center text-muted-foreground py-2">
-            Ficou com dúvida sobre a resposta ou o comentário? Pergunte ao professor IA!
-          </p>
-        ) : (
+        {messages.length > 0 && (
           messages.map((m, i) => (
             <div key={i} className={cn("flex gap-2 max-w-[90%]", m.role === 'user' ? "self-end flex-row-reverse" : "self-start")}>
               <div className={cn("shrink-0 h-6 w-6 rounded-full flex items-center justify-center mt-1",

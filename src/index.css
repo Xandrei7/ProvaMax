@@ -86,3 +86,26 @@ body {
 #root {
   min-height: 100svh;
 }
+
+/* Marca-texto global */
+mark {
+  background-color: #fff59d;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* Estrutura de bloco para conteúdo de teoria */
+.theory-content p   { margin-bottom: 0.75em; }
+.theory-content ul,
+.theory-content ol  { margin: 0.5em 0 0.75em 1.5em; }
+.theory-content li  { margin-bottom: 0.25em; }
+.theory-content ul  { list-style-type: disc; }
+.theory-content ol  { list-style-type: decimal; }
+.theory-content h1,
+.theory-content h2,
+.theory-content h3,
+.theory-content h4  { font-weight: 600; margin: 0.75em 0 0.4em; }
+.theory-content h1  { font-size: 1.2em; }
+.theory-content h2  { font-size: 1.1em; }
+.theory-content blockquote { border-left: 3px solid hsl(var(--border)); padding-left: 0.75em; color: hsl(var(--muted-foreground)); margin: 0.5em 0; }

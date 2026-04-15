@@ -103,11 +103,14 @@ export function sanitizeRichTextForRender(html: string | null | undefined, prese
 
     const safeColor = preserveColor ? sanitizeColorValue(style?.color ?? '') : null
 
+    const isMark = tag === 'mark'
+
     let result = inner
     if (inner.trim()) {
       if (isUnderline) result = `<u>${result}</u>`
       if (isItalic) result = `<i>${result}</i>`
       if (isBold) result = `<b>${result}</b>`
+      if (isMark) result = `<mark>${result}</mark>`
       if (safeColor) result = `<span style="color:${safeColor}">${result}</span>`
     }
 
@@ -124,6 +127,65 @@ export function sanitizeRichTextForRender(html: string | null | undefined, prese
     .trim()
 
   return normalized ? normalized.replace(/\n/g, '<br />') : ''
+}
+
+/**
+ * Sanitizador para conteúdo de TEORIA.
+ * Diferente de sanitizeRichTextForRender, preserva estrutura de bloco:
+ * <p>, <ul>, <ol>, <li>, headings, <table>.
+ * Seguro: remove scripts, eventos inline e atributos perigosos.
+ */
+export function sanitizeTheoryHtml(html: string | null | undefined): string {
+  if (!html) return ''
+
+  const decoded = decodeIfNeeded(html)
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(decoded, 'text/html')
+
+  const BLOCK_PRESERVE = ['p', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'td', 'th']
+  const STRIP = ['head', 'style', 'script', 'meta', 'link', 'iframe', 'object', 'embed']
+
+  function walk(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return escapeHtml(node.textContent ?? '')
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return ''
+
+    const el = node as HTMLElement
+    const tag = el.tagName.toLowerCase()
+
+    if (STRIP.includes(tag)) return ''
+
+    const inner = Array.from(el.childNodes).map(walk).join('')
+
+    if (tag === 'br') return '<br />'
+    if (tag === 'mark') return `<mark>${inner}</mark>`
+    if (tag === 'b' || tag === 'strong') return `<b>${inner}</b>`
+    if (tag === 'i' || tag === 'em') return `<i>${inner}</i>`
+    if (tag === 'u') return `<u>${inner}</u>`
+
+    if (tag === 'span') {
+      const color = sanitizeColorValue(el.style?.color ?? '')
+      if (color) return `<span style="color:${color}">${inner}</span>`
+      return inner
+    }
+
+    // Block tags: preserve, applying inline styles if present
+    if (BLOCK_PRESERVE.includes(tag) || tag === 'div') {
+      const style = el.style
+      let content = inner
+      if (style?.textDecoration?.includes('underline') || style?.textDecorationLine?.includes('underline')) content = `<u>${content}</u>`
+      if (style?.fontStyle === 'italic') content = `<i>${content}</i>`
+      const fw = style?.fontWeight ?? ''
+      if (fw === 'bold' || fw === 'bolder' || (!Number.isNaN(parseInt(fw)) && parseInt(fw) >= 600)) content = `<b>${content}</b>`
+      const outputTag = tag === 'div' ? 'p' : tag
+      return `<${outputTag}>${content}</${outputTag}>`
+    }
+
+    return inner
+  }
+
+  return walk(doc.body).replace(/\u00a0/g, ' ').trim()
 }
 
 export function extractEmphasisFromHtml(html: string, preserveColor = false): string {

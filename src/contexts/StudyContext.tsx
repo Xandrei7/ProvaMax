@@ -38,14 +38,23 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         console.error('[StudyContext] Erro ao carregar respostas:', answersRes.error.message)
       }
 
-      setAnswers(
-        (answersRes.data ?? []).map(row => ({
-          questionId: row.question_id as string,
-          selectedAnswer: row.selected_answer as string,
-          isCorrect: row.is_correct as boolean,
-          answeredAt: row.answered_at as string,
-        }))
-      )
+      // Deduplica por questionId, mantendo a resposta mais recente.
+      // Garante que duplicatas no banco (constraint ausente ou falha de upsert)
+      // não inflem as estatísticas.
+      const rawAnswers = (answersRes.data ?? []).map(row => ({
+        questionId:     row.question_id     as string,
+        selectedAnswer: row.selected_answer as string,
+        isCorrect:      row.is_correct      as boolean,
+        answeredAt:     row.answered_at     as string,
+      }))
+      const answerMap = new Map<string, UserAnswer>()
+      for (const a of rawAnswers) {
+        const existing = answerMap.get(a.questionId)
+        if (!existing || a.answeredAt > existing.answeredAt) {
+          answerMap.set(a.questionId, a)
+        }
+      }
+      setAnswers([...answerMap.values()])
     }).catch(err => {
       console.error('[StudyContext] Erro inesperado ao carregar:', err)
     }).finally(() => setStudyLoading(false))

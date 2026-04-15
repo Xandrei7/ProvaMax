@@ -4,17 +4,20 @@ import { Upload, CheckCircle2, XCircle, ChevronDown, ChevronUp, Loader2 } from '
 import { Header } from '@/components/Header'
 import { parseQuestionsText, type ParsedQuestion } from '@/lib/parser'
 import { extractEmphasisFromHtml } from '@/lib/richText'
-import { getDisciplines, getSubjects } from '@/lib/dataService'
+import { getDisciplines, getSubjects, getSubjectParts } from '@/lib/dataService'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import type { Discipline } from '@/types'
+import type { Discipline, Subject, SubjectPart } from '@/types'
 
 export function Import() {
   const navigate = useNavigate()
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
+  const [subjects, setSubjects] = useState<Subject[]>([])
+  const [availableParts, setAvailableParts] = useState<SubjectPart[]>([])
   const [disciplineName, setDisciplineName] = useState('')
   const [subjectName, setSubjectName] = useState('')
+  const [partName, setPartName] = useState('')
   const [rawText, setRawText] = useState('')
   const [parsed, setParsed] = useState<ParsedQuestion[] | null>(null)
   const [saving, setSaving] = useState(false)
@@ -33,6 +36,18 @@ export function Import() {
     getDisciplines().then(setDisciplines)
   }, [])
 
+  useEffect(() => {
+    const disc = disciplines.find(d => d.name.trim().toLowerCase() === disciplineName.trim().toLowerCase())
+    if (!disc) { setSubjects([]); setSubjectName(''); setAvailableParts([]); setPartName(''); return }
+    getSubjects(disc.id).then(setSubjects)
+  }, [disciplineName, disciplines])
+
+  useEffect(() => {
+    const sub = subjects.find(s => s.name.trim().toLowerCase() === subjectName.trim().toLowerCase())
+    if (!sub) { setAvailableParts([]); setPartName(''); return }
+    getSubjectParts(sub.id).then(setAvailableParts)
+  }, [subjectName, subjects])
+
   function handleParse() {
     if (!disciplineName.trim()) return toast.error('Informe o nome da Matéria.')
     if (!subjectName.trim()) return toast.error('Informe o nome do Assunto.')
@@ -50,7 +65,11 @@ export function Import() {
       .trim()
       
     // --- CAMADA ADITIVA MOBILE ISOLADA (Alternativas colapsadas) ---
-    const isCollapsed = /[A-E][a-z\u00C0-\u00FF]{2,}.*?[B-E][a-z\u00C0-\u00FF]{2,}/.test(text)
+    // Só ativa se NÃO houver alternativas já formatadas (a) / A) ).
+    // Se o texto já tem "a) " ou "A) ", ele vem do PC com formato correto
+    // e o heurístico de colapso NÃO deve tocar nele.
+    const hasProperAlternatives = /^[ \t]*[a-eA-E][.)]\s/m.test(text)
+    const isCollapsed = !hasProperAlternatives && /[A-E][a-z\u00C0-\u00FF]{2,}.*?[B-E][a-z\u00C0-\u00FF]{2,}/.test(text)
     if (isCollapsed) {
       text = text.replace(/([A-E])([a-z\u00C0-\u00FF]{2,})/g, '\n$1) $2')
     }
@@ -61,8 +80,10 @@ export function Import() {
       .replace(/\n{2,}/g, '\n\n') // Reduz excessos
       .replace(/(\n|^)([ \t]+)(\d+[.)]\s+)/g, '$1$3') // Remove espaços antes de números
       // Caso o texto não tenha NENHUMA quebra de linha (colagem compacta mobile)
-      // Tenta inserir quebras antes de números de questão:
-      .replace(/([^ \n])(\d+[.)]\s+[A-Z])/g, '$1\n$2')
+      // Tenta inserir quebras antes de números de questão.
+      // [^ \n0-9] exclui dígitos do trigger para não quebrar números dentro de
+      // outros números (ex: não transformar "2025)" em "2\n025)" nem "10." em "1\n0."):
+      .replace(/([^ \n0-9])(\d+[.)]\s+[A-Z])/g, '$1\n$2')
       // Garante que o Gabarito esteja isolado
       .replace(/([^\n])(GABARITO\s*COMENTADO)/i, '$1\n\n$2')
       .replace(/(GABARITO\s*COMENTADO)([^\n])/i, '$1\n\n$2')
@@ -134,7 +155,27 @@ export function Import() {
         subId = data.id
       }
 
-      // 3. Insert questions
+      // 3. Part: find existing or create (opcional)
+      let partId: string | null = null
+      if (partName.trim()) {
+        const existingParts = await getSubjectParts(subId)
+        const existingPart = existingParts.find(
+          p => p.name.trim().toLowerCase() === partName.trim().toLowerCase()
+        )
+        if (existingPart) {
+          partId = existingPart.id
+        } else {
+          const { data, error } = await supabase
+            .from('subject_parts')
+            .insert({ name: partName.trim(), subject_id: subId, sort_order: existingParts.length + 1 })
+            .select('id')
+            .single()
+          if (error) throw error
+          partId = data.id
+        }
+      }
+
+      // 4. Insert questions
       const rows = parsed.map((q: ParsedQuestion, i: number) => ({
         statement: q.statement,
         type: q.type,
@@ -144,6 +185,7 @@ export function Import() {
         legal_basis: null,
         exam_tips: null,
         associated_text: q.associatedText ?? null,
+        part_id: partId,
         subject_id: subId,
         discipline_id: discId,
         sort_order: i + 1,
@@ -153,7 +195,11 @@ export function Import() {
       if (error) throw error
 
       toast.success(`${parsed.length} questões importadas com sucesso!`)
-      navigate('/')
+      if (partId) {
+        navigate(`/study/${subId}/part/${partId}`)
+      } else {
+        navigate(`/study/${subId}`)
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao salvar.'
       toast.error(msg)
@@ -199,6 +245,7 @@ export function Import() {
   function reset() {
     setParsed(null)
     setExpandedIdx(null)
+    setPartName('')
   }
 
   return (
@@ -229,12 +276,35 @@ export function Import() {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-muted-foreground">Assunto</label>
-                  <input
+                  <select
                     value={subjectName}
                     onChange={e => setSubjectName(e.target.value)}
-                    placeholder="Ex: Punições Disciplinares"
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
+                    disabled={subjects.length === 0}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  >
+                    <option value="">Selecione o assunto</option>
+                    {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                  </select>
+                  {subjects.length === 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">Informe a Matéria para ver os assuntos disponíveis.</p>
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-muted-foreground">Parte (opcional)</label>
+                  <select
+                    value={partName}
+                    onChange={e => setPartName(e.target.value)}
+                    disabled={availableParts.length === 0}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  >
+                    <option value="">Sem parte (assunto geral)</option>
+                    {availableParts.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                  </select>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {availableParts.length === 0
+                      ? 'Informe a Matéria e o Assunto para ver as partes disponíveis.'
+                      : 'Selecione a parte correspondente, ou deixe em "Sem parte".'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -287,6 +357,7 @@ export function Import() {
               </p>
               <p className="text-sm text-green-600/80 dark:text-green-400/70">
                 Matéria: <strong>{disciplineName}</strong> · Assunto: <strong>{subjectName}</strong>
+                {partName.trim() && <> · Parte: <strong>{partName}</strong></>}
               </p>
             </div>
 

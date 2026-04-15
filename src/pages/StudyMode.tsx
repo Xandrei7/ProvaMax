@@ -3,16 +3,16 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Shuffle, List, RotateCcw } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { QuestionCard } from '@/components/QuestionCard'
-import { getSubjects, getDisciplines, getQuestions, generateFlashcard } from '@/lib/dataService'
+import { getSubjects, getDisciplines, getQuestions, getSubjectParts, generateFlashcard } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
-import { shuffle } from '@/lib/utils'
+import { shuffle, normalizeAnswer } from '@/lib/utils'
 import type { Question, UserAnswer } from '@/types'
 
-type Mode = 'discipline' | 'subject'
+type Mode = 'discipline' | 'subject' | 'part'
 
 export function StudyMode() {
-  const { subjectId, disciplineId } = useParams<{ subjectId?: string; disciplineId?: string }>()
-  const mode: Mode = disciplineId ? 'discipline' : 'subject'
+  const { subjectId, disciplineId, partId } = useParams<{ subjectId?: string; disciplineId?: string; partId?: string }>()
+  const mode: Mode = disciplineId ? 'discipline' : partId ? 'part' : 'subject'
   const navigate = useNavigate()
   const { answers, studyLoading, recordAnswer, resetByQuestionIds } = useStudy()
 
@@ -31,7 +31,19 @@ export function StudyMode() {
 
   useEffect(() => {
     async function load() {
-      if (mode === 'subject' && subjectId) {
+      if (mode === 'part' && subjectId && partId) {
+        const [subjects, disciplines, parts, qs] = await Promise.all([
+          getSubjects(),
+          getDisciplines(),
+          getSubjectParts(subjectId),
+          getQuestions({ subjectId, partId }),
+        ])
+        const subject = subjects.find(s => s.id === subjectId)
+        const discipline = disciplines.find(d => d.id === subject?.discipline_id)
+        const part = parts.find(p => p.id === partId)
+        setTitle(`${discipline?.name ?? ''} › ${subject?.name ?? ''} › ${part?.name ?? ''}`)
+        setAllQuestions(qs)
+      } else if (mode === 'subject' && subjectId) {
         const [subjects, disciplines, qs] = await Promise.all([
           getSubjects(),
           getDisciplines(),
@@ -53,7 +65,7 @@ export function StudyMode() {
       setLoading(false)
     }
     load()
-  }, [subjectId, disciplineId, mode])
+  }, [subjectId, disciplineId, partId, mode])
 
   const answeredIds = new Set(answers.map(a => a.questionId))
   const answeredCount = allQuestions.filter(q => answeredIds.has(q.id)).length
@@ -115,7 +127,9 @@ export function StudyMode() {
     const q = questions[currentIndex]
     if (!selected || !q || submitted) return
 
-    const isCorrect = selected === q.correct_answer
+    const normSelected = normalizeAnswer(selected, q.type)
+    const normCorrect  = normalizeAnswer(q.correct_answer, q.type)
+    const isCorrect    = normSelected !== '' && normSelected === normCorrect
 
     const answer: UserAnswer = {
       questionId: q.id,
@@ -138,7 +152,7 @@ export function StudyMode() {
 
   const handleNext = useCallback(() => {
     if (currentIndex === questions.length - 1) {
-      if (mode === 'subject' && subjectId) {
+      if ((mode === 'subject' || mode === 'part') && subjectId) {
         navigate(`/study/${subjectId}/complete`)
       } else {
         navigate('/')
@@ -199,18 +213,16 @@ export function StudyMode() {
                 <p className="text-sm text-muted-foreground">Questões embaralhadas</p>
               </div>
             </button>
-            {hasProgress && (
-              <button
-                onClick={() => resetAndStart('sequential')}
-                className="flex items-center gap-4 rounded-xl border border-dashed border-border px-4 py-4 text-left hover:border-primary transition-all"
-              >
-                <RotateCcw size={22} className="text-muted-foreground" />
-                <div>
-                  <p className="font-medium text-muted-foreground">Começar do início</p>
-                  <p className="text-sm text-muted-foreground">Resetar e reiniciar</p>
-                </div>
-              </button>
-            )}
+            <button
+              onClick={() => resetAndStart('sequential')}
+              className="flex items-center gap-4 rounded-xl border border-dashed border-border px-4 py-4 text-left hover:border-primary transition-all"
+            >
+              <RotateCcw size={22} className="text-muted-foreground" />
+              <div>
+                <p className="font-medium text-muted-foreground">Começar do início</p>
+                <p className="text-sm text-muted-foreground">Resetar e reiniciar</p>
+              </div>
+            </button>
           </div>
         </main>
       </div>

@@ -31,10 +31,14 @@ export function StudyComplete() {
   }, [subjectId])
 
   const questionIds = questions.map(q => q.id)
-  const subjectAnswers = answers.filter(a => questionIds.includes(a.questionId))
-  const correct = subjectAnswers.filter(a => a.isCorrect).length
-  const wrong = subjectAnswers.filter(a => !a.isCorrect).length
+  // Filtra apenas respostas deste assunto. Usa Set para lookup O(1).
+  const questionSet = new Set(questionIds)
+  const subjectAnswers = answers.filter(a => questionSet.has(a.questionId))
   const answered = subjectAnswers.length
+  const correct  = subjectAnswers.filter(a => a.isCorrect).length
+  // wrong = answered - correct garante que erros + acertos = respondidas, sem
+  // inflar erros com registros duplicados ou com isCorrect incorreto no banco.
+  const wrong   = answered - correct
   const percent = answered === 0 ? 0 : Math.round((correct / answered) * 100)
 
   return (
