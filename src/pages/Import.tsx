@@ -1,17 +1,171 @@
 import { useEffect, useState, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Upload, CheckCircle2, XCircle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { parseQuestionsText, type ParsedQuestion } from '@/lib/parser'
 import { extractEmphasisFromHtml } from '@/lib/richText'
-import { getDisciplines, getSubjects, getSubjectParts } from '@/lib/dataService'
+import { getDisciplines, getSubjects, getSubjectParts, getQuestions } from '@/lib/dataService'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { Discipline, Subject, SubjectPart } from '@/types'
 
+// Importante: não usar marcador com ponto (ex.: "e. "),
+// porque isso colide com final normal de frase/palavra e separa a última letra.
+const INLINE_ALT_MARKER_REGEX = /(^|[^\n\s])([a-eA-E]\)\s)/g
+
+
+function getPreviousVisibleChar(text: string, markerStart: number): string {
+  let cursor = markerStart - 1
+
+  while (cursor >= 0) {
+    const char = text[cursor]
+
+    if (/[\u200B-\u200D\uFEFF]/.test(char) || /\p{M}/u.test(char)) {
+      cursor -= 1
+      continue
+    }
+
+    if (char === '>') {
+      const tagStart = text.lastIndexOf('<', cursor)
+      if (tagStart >= 0) {
+        cursor = tagStart - 1
+        continue
+      }
+    }
+
+    return char
+  }
+
+  return ''
+}
+
+function normalizeInlineAlternativeBreaks(text: string, regex: RegExp): string {
+  return text.replace(regex, (fullMatch, prefix, marker, offset: number, source: string) => {
+    if (!prefix) return fullMatch
+
+    const lineStart = source.lastIndexOf('\n', offset) + 1
+    const lineEndRaw = source.indexOf('\n', offset)
+    const lineEnd = lineEndRaw === -1 ? source.length : lineEndRaw
+    const currentLine = source.slice(lineStart, lineEnd)
+    const lineMarkers = [...currentLine.matchAll(/[a-eA-E]\)\s/g)].map(m => m[0][0].toUpperCase())
+    const lineHasInlineOptionBlock =
+      lineMarkers.length >= 3 &&
+      lineMarkers.includes('A') &&
+      lineMarkers.includes('B') &&
+      lineMarkers.includes('C')
+
+    if (!lineHasInlineOptionBlock) {
+      return fullMatch
+    }
+
+    const markerStart = offset + prefix.length
+    const previousVisibleChar = getPreviousVisibleChar(source, markerStart)
+
+    if (/\p{L}/u.test(previousVisibleChar)) {
+      return fullMatch
+    }
+
+    return `${prefix}\n${marker}`
+  })
+}
+
+type CollapsedAlternativeMarker = {
+  index: number
+  letter: string
+}
+
+const MAX_COLLAPSED_ALT_MARKER_GAP = 380
+const MAX_COLLAPSED_ALT_RUN_SPAN = 1400
+const MAX_COLLAPSED_ALT_LINE_BREAKS = 1
+
+function findCollapsedAlternativeRun(text: string): CollapsedAlternativeMarker[] {
+  const markerRegex = /([^\n\sA-Za-zÀ-ÿ])([A-E])([a-z\u00C0-\u00FF]{2,})/g
+  const markers: CollapsedAlternativeMarker[] = []
+
+  for (const match of text.matchAll(markerRegex)) {
+    const matchIndex = match.index ?? -1
+    if (matchIndex < 0) continue
+    markers.push({ index: matchIndex + match[1].length, letter: match[2] })
+  }
+
+  if (markers.length < 4) return []
+
+  let bestRun: CollapsedAlternativeMarker[] = []
+
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i].letter !== 'A') continue
+
+    const run: CollapsedAlternativeMarker[] = [markers[i]]
+    let expectedCode = 'B'.charCodeAt(0)
+
+    for (let j = i + 1; j < markers.length && expectedCode <= 'E'.charCodeAt(0); j++) {
+      const previousMarker = run[run.length - 1]
+      const gap = markers[j].index - previousMarker.index
+      if (gap > MAX_COLLAPSED_ALT_MARKER_GAP) break
+
+      if (markers[j].letter.charCodeAt(0) === expectedCode) {
+        run.push(markers[j])
+        expectedCode++
+      }
+    }
+
+    if (run.length < 4) continue
+
+    const runSpan = run[run.length - 1].index - run[0].index
+    if (runSpan > MAX_COLLAPSED_ALT_RUN_SPAN) continue
+
+    const runSegment = text.slice(run[0].index, run[run.length - 1].index)
+    const runLineBreaks = runSegment.match(/\n/g)?.length ?? 0
+    if (runLineBreaks > MAX_COLLAPSED_ALT_LINE_BREAKS) continue
+
+    const bestSpan =
+      bestRun.length > 0
+        ? bestRun[bestRun.length - 1].index - bestRun[0].index
+        : Number.POSITIVE_INFINITY
+
+    if (run.length > bestRun.length || (run.length === bestRun.length && runSpan < bestSpan)) {
+      bestRun = run
+    }
+  }
+
+  return bestRun
+}
+
+function normalizeCollapsedAlternativeRun(text: string, run: CollapsedAlternativeMarker[]): string {
+  if (run.length === 0) return text
+
+  let normalized = text
+  let offset = 0
+
+  for (const marker of run) {
+    const markerIndex = marker.index + offset
+    normalized = `${normalized.slice(0, markerIndex)}\n${marker.letter}) ${normalized.slice(markerIndex + 1)}`
+    offset += 3
+  }
+
+  return normalized
+}
+
+type StudyNowImportState = {
+  fromStudyNow?: boolean
+  disciplina?: string
+  assunto?: string
+  semana?: number
+  dia?: string
+}
+
+function normStr(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/\p{Mn}/gu, '').trim()
+}
+
 export function Import() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const fromStudyNowState = (location.state as StudyNowImportState | null)?.fromStudyNow
+    ? (location.state as StudyNowImportState)
+    : null
+
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [availableParts, setAvailableParts] = useState<SubjectPart[]>([])
@@ -20,10 +174,13 @@ export function Import() {
   const [partName, setPartName] = useState('')
   const [rawText, setRawText] = useState('')
   const [parsed, setParsed] = useState<ParsedQuestion[] | null>(null)
+  const [parsing, setParsing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [isMobile, setIsMobile] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const disciplinePrePopRef = useRef(false)
+  const subjectPrePopRef = useRef(false)
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768)
@@ -36,11 +193,37 @@ export function Import() {
     getDisciplines().then(setDisciplines)
   }, [])
 
+  // Pré-popula disciplina vinda do StudyNow (roda uma única vez quando disciplines carrega)
+  useEffect(() => {
+    if (disciplinePrePopRef.current) return
+    if (!fromStudyNowState?.disciplina || disciplines.length === 0) return
+    disciplinePrePopRef.current = true
+    const planDisc = fromStudyNowState.disciplina
+    const match = disciplines.find(d =>
+      normStr(d.name).includes(normStr(planDisc)) || normStr(planDisc).includes(normStr(d.name))
+    )
+    setDisciplineName(match ? match.name : planDisc)
+  }, [fromStudyNowState, disciplines])
+
   useEffect(() => {
     const disc = disciplines.find(d => d.name.trim().toLowerCase() === disciplineName.trim().toLowerCase())
     if (!disc) { setSubjects([]); setSubjectName(''); setAvailableParts([]); setPartName(''); return }
     getSubjects(disc.id).then(setSubjects)
   }, [disciplineName, disciplines])
+
+  // Pré-popula assunto vindo do StudyNow (roda quando subjects carrega após a disciplina ser definida)
+  useEffect(() => {
+    if (subjectPrePopRef.current) return
+    if (!fromStudyNowState?.assunto || subjects.length === 0) return
+    subjectPrePopRef.current = true
+    const baseAssunto = fromStudyNowState.assunto.split(' — ')[0].trim()
+    // Não pré-popula se for bateria acumulada (não existe subject literal para isso)
+    if (normStr(baseAssunto).includes('acumulad')) return
+    const match = subjects.find(s =>
+      normStr(s.name).includes(normStr(baseAssunto)) || normStr(baseAssunto).includes(normStr(s.name))
+    )
+    setSubjectName(match ? match.name : baseAssunto)
+  }, [fromStudyNowState, subjects])
 
   useEffect(() => {
     const sub = subjects.find(s => s.name.trim().toLowerCase() === subjectName.trim().toLowerCase())
@@ -48,30 +231,46 @@ export function Import() {
     getSubjectParts(sub.id).then(setAvailableParts)
   }, [subjectName, subjects])
 
-  function handleParse() {
+  // Fingerprint local (evita depender de módulo externo durante o parse)
+  function _fpLocal(statement: string, options: { letter: string; text: string }[] | null | undefined): string {
+    const clean = (s: string) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+    let core = clean(statement)
+    core = core.replace(/^\s*\([^)]{0,150}\)\s*/, '')
+    core = core.replace(/^\s*\[[^\]]{0,150}\]\s*/, '')
+    core = core.replace(/^(?:[\w/]+\s*[-–]\s*){2,}/i, '').trim()
+    return core + '\x01' + (options ?? []).map(o => clean(o.text)).join('\x00')
+  }
+
+  async function handleParse() {
     if (!disciplineName.trim()) return toast.error('Informe o nome da Matéria.')
     if (!subjectName.trim()) return toast.error('Informe o nome do Assunto.')
-    
+
     // Captura o valor diretamente do Ref (DOM) para garantir valor real no Mobile
     const currentRawText = textareaRef.current?.value || rawText
     if (!currentRawText.trim()) return toast.error('Cole as questões no campo de texto.')
 
     // Normalização inicial para Mobile (Causa: falta de quebras de linha ou caracteres exóticos)
-    let text = currentRawText
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      // Adiciona quebra de linha antes de letras de alternativas se estiverem coladas em texto
-      .replace(/([^\n\s])([a-eA-E][.)]\s)/g, '$1\n$2')
-      .trim()
+    let text = normalizeInlineAlternativeBreaks(
+      currentRawText
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .normalize('NFC')
+        .replace(/\u00A0/g, ' ')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\u00AD/g, ''),
+      INLINE_ALT_MARKER_REGEX,
+    ).trim()
       
     // --- CAMADA ADITIVA MOBILE ISOLADA (Alternativas colapsadas) ---
     // Só ativa se NÃO houver alternativas já formatadas (a) / A) ).
     // Se o texto já tem "a) " ou "A) ", ele vem do PC com formato correto
     // e o heurístico de colapso NÃO deve tocar nele.
     const hasProperAlternatives = /^[ \t]*[a-eA-E][.)]\s/m.test(text)
-    const isCollapsed = !hasProperAlternatives && /[A-E][a-z\u00C0-\u00FF]{2,}.*?[B-E][a-z\u00C0-\u00FF]{2,}/.test(text)
-    if (isCollapsed) {
-      text = text.replace(/([A-E])([a-z\u00C0-\u00FF]{2,})/g, '\n$1) $2')
+    if (!hasProperAlternatives) {
+      const collapsedRun = findCollapsedAlternativeRun(text)
+      if (collapsedRun.length > 0) {
+        text = normalizeCollapsedAlternativeRun(text, collapsedRun)
+      }
     }
     // ---------------------------------------------------------------
 
@@ -87,10 +286,10 @@ export function Import() {
       // Garante que o Gabarito esteja isolado
       .replace(/([^\n])(GABARITO\s*COMENTADO)/i, '$1\n\n$2')
       .replace(/(GABARITO\s*COMENTADO)([^\n])/i, '$1\n\n$2')
-      // Garante que as alternativas (a, b, c, d, e) tenham quebra antes
-      .replace(/([^\n\s])([a-eA-E]\)\s)/g, '$1\n$2')
 
-    const questions = parseQuestionsText(finalNormalizedText)
+    const normalizedForAlternatives = normalizeInlineAlternativeBreaks(finalNormalizedText, INLINE_ALT_MARKER_REGEX)
+
+    const questions = parseQuestionsText(normalizedForAlternatives)
 
     if (questions.length === 0) {
       return toast.error(
@@ -98,15 +297,44 @@ export function Import() {
       )
     }
 
-    const semGabarito = questions.filter(q => !q.correctAnswer)
+    // ── Trava de duplicidade na prévia ────────────────────────────────────────
+    setParsing(true)
+    let finalQuestions = questions
+    try {
+      const disc = disciplines.find(
+        d => d.name.trim().toLowerCase() === disciplineName.trim().toLowerCase()
+      )
+      if (disc) {
+        const existingQs = await getQuestions({ disciplineId: disc.id })
+        const existingFps = new Set(existingQs.map(q => _fpLocal(q.statement, q.options)))
+        finalQuestions = questions.filter(q => !existingFps.has(_fpLocal(q.statement, q.options)))
+        const skipped = questions.length - finalQuestions.length
+        if (finalQuestions.length === 0) {
+          toast.error('Todas as questões coladas já existem na base. Nenhuma será importada.')
+          setParsing(false)
+          return
+        }
+        if (skipped > 0) {
+          toast.info(`${skipped} questão(ões) já existia(m) na base e foi(ram) removida(s) da prévia.`)
+        }
+      }
+    } catch (err) {
+      console.error('[handleParse] checagem de duplicatas falhou:', err)
+      // falha silenciosa: mostra todas as questões sem filtrar
+    } finally {
+      setParsing(false)
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const semGabarito = finalQuestions.filter(q => !q.correctAnswer)
     if (semGabarito.length > 0) {
       toast.warning(
         `${semGabarito.length} questão(ões) sem gabarito identificado. Verifique o formato do GABARITO COMENTADO.`
       )
     }
 
-    setParsed(questions)
-    toast.success(`${questions.length} questões identificadas! Confira e clique em Importar.`)
+    setParsed(finalQuestions)
+    toast.success(`${finalQuestions.length} questões identificadas! Confira e clique em Importar.`)
   }
 
   async function handleSave() {
@@ -175,8 +403,21 @@ export function Import() {
         }
       }
 
-      // 4. Insert questions
-      const rows = parsed.map((q: ParsedQuestion, i: number) => ({
+      // 4. Duplicate guard: filter out questions already in the DB
+      const existingQs = await getQuestions({ disciplineId: discId })
+      const existingFps = new Set(existingQs.map(q => _fpLocal(q.statement, q.options)))
+      const toInsert = parsed.filter(q => !existingFps.has(_fpLocal(q.statement, q.options)))
+      const skipped = parsed.length - toInsert.length
+      if (toInsert.length === 0) {
+        toast.warning('Todas as questões já existem na base. Nenhuma nova questão foi importada.')
+        return
+      }
+      if (skipped > 0) {
+        toast.info(`${skipped} questão(ões) já existia(m) na base e foi(ram) ignorada(s).`)
+      }
+
+      // 5. Insert questions
+      const rows = toInsert.map((q: ParsedQuestion, i: number) => ({
         statement: q.statement,
         type: q.type,
         options: q.type === 'multiple_choice' ? q.options : null,
@@ -194,7 +435,7 @@ export function Import() {
       const { error } = await supabase.from('questions').insert(rows)
       if (error) throw error
 
-      toast.success(`${parsed.length} questões importadas com sucesso!`)
+      toast.success(`${toInsert.length} questões importadas com sucesso!`)
       if (partId) {
         navigate(`/study/${subId}/part/${partId}`)
       } else {
@@ -256,6 +497,22 @@ export function Import() {
         {!parsed ? (
           /* ── STEP 1: paste ── */
           <div className="flex flex-col gap-5">
+
+            {/* Banner de contexto do StudyNow */}
+            {fromStudyNowState && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 dark:border-blue-900/50 px-4 py-3">
+                <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">
+                  Importando para: <strong>{fromStudyNowState.disciplina}</strong>
+                  {fromStudyNowState.assunto && (
+                    <> › <strong>{fromStudyNowState.assunto.split(' — ')[0]}</strong></>
+                  )}
+                </p>
+                <p className="text-xs text-blue-600/80 dark:text-blue-400/70 mt-0.5">
+                  Disciplina pré-selecionada. Ajuste assunto/parte conforme necessário ou crie novos inline.
+                </p>
+              </div>
+            )}
+
             <div className="rounded-xl border border-border bg-card p-4">
               <p className="text-sm font-semibold mb-3">1. Informe a Matéria e o Assunto</p>
               <div className="flex flex-col gap-3">
@@ -275,36 +532,48 @@ export function Import() {
                   </datalist>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-muted-foreground">Assunto</label>
-                  <select
+                  <label className="mb-1 block text-xs text-muted-foreground">
+                    Assunto{' '}
+                    <span className="text-muted-foreground/60">
+                      {subjects.length > 0 ? `(${subjects.length} existentes — ou digite novo)` : '(ou digite novo assunto)'}
+                    </span>
+                  </label>
+                  <input
+                    list="subjects-list"
                     value={subjectName}
                     onChange={e => setSubjectName(e.target.value)}
-                    disabled={subjects.length === 0}
+                    placeholder={disciplineName ? 'Selecione ou digite novo assunto...' : 'Informe a Matéria primeiro'}
+                    disabled={!disciplineName.trim()}
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                  >
-                    <option value="">Selecione o assunto</option>
-                    {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                  </select>
-                  {subjects.length === 0 && (
-                    <p className="mt-1 text-xs text-muted-foreground">Informe a Matéria para ver os assuntos disponíveis.</p>
+                  />
+                  <datalist id="subjects-list">
+                    {subjects.map(s => <option key={s.id} value={s.name} />)}
+                  </datalist>
+                  {!disciplineName.trim() && (
+                    <p className="mt-1 text-xs text-muted-foreground">Informe a Matéria para ver assuntos disponíveis.</p>
                   )}
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-muted-foreground">Parte (opcional)</label>
-                  <select
+                  <label className="mb-1 block text-xs text-muted-foreground">
+                    Parte{' '}
+                    <span className="text-muted-foreground/60">
+                      {availableParts.length > 0 ? `(${availableParts.length} existentes — ou crie nova)` : '(opcional — deixe vazio para assunto geral)'}
+                    </span>
+                  </label>
+                  <input
+                    list="parts-list"
                     value={partName}
                     onChange={e => setPartName(e.target.value)}
-                    disabled={availableParts.length === 0}
+                    placeholder={subjectName ? 'Selecione parte, crie nova ou deixe vazio' : 'Informe o Assunto primeiro'}
+                    disabled={!subjectName.trim()}
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                  >
-                    <option value="">Sem parte (assunto geral)</option>
-                    {availableParts.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
-                  </select>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {availableParts.length === 0
-                      ? 'Informe a Matéria e o Assunto para ver as partes disponíveis.'
-                      : 'Selecione a parte correspondente, ou deixe em "Sem parte".'}
-                  </p>
+                  />
+                  <datalist id="parts-list">
+                    {availableParts.map(p => <option key={p.id} value={p.name} />)}
+                  </datalist>
+                  {subjectName.trim() && availableParts.length === 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">Nenhuma parte ainda. Digite um nome para criar nova parte inline.</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -340,12 +609,12 @@ export function Import() {
             </div>
 
             <button
-              onClick={handleParse}
-              disabled={!disciplineName || !subjectName || !rawText}
+              onClick={() => { void handleParse() }}
+              disabled={!disciplineName || !subjectName || !rawText || parsing}
               className="flex items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
             >
-              <Upload size={16} />
-              Identificar questões
+              {parsing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+              {parsing ? 'Verificando...' : 'Identificar questões'}
             </button>
           </div>
         ) : (

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Clock, CheckCircle2, ChevronRight, Shuffle, BrainCircuit, ChevronDown, ChevronUp, Scissors } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
@@ -20,6 +20,18 @@ interface SimAnswer {
   isCorrect: boolean
   disciplineId: string
   subjectId: string
+}
+
+interface StudyNowMiniSimuladoState {
+  fromStudyNow?: boolean
+  autoStartAdvanced?: boolean
+  sourceTaskId?: string
+  week?: number
+  day?: string
+  disciplineIds?: string[]
+  subjectIds?: string[]
+  questionCount?: number
+  timeMinutes?: number
 }
 
 // ─── Interleaving algorithm ─────────────────────────────────────────────────
@@ -75,6 +87,7 @@ function buildInterleavedQuestions(
 
 export function Simulado() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { recordAnswer } = useStudy()
   const { user } = useAuth()
 
@@ -117,6 +130,7 @@ export function Simulado() {
   const finishedRef = useRef(false)
   const startedAtRef = useRef<number>(0)
   const questionsRef = useRef<Question[]>([])
+  const autoStartFromStudyRef = useRef(false)
   simAnswersRef.current = simAnswers
   questionsRef.current = questions
 
@@ -149,6 +163,57 @@ export function Simulado() {
     }, 1000)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [phase, activeTime])
+
+  useEffect(() => {
+    if (loading || phase !== 'setup' || autoStartFromStudyRef.current) return
+
+    const navState = location.state as StudyNowMiniSimuladoState | null
+    if (!navState?.fromStudyNow || !navState.autoStartAdvanced) return
+
+    const requestedSubjectIds = Array.isArray(navState.subjectIds) ? navState.subjectIds : []
+    const validSubjectIds = Array.from(new Set(
+      requestedSubjectIds.filter(subjectId => allQuestions.some(q => q.subject_id === subjectId))
+    ))
+
+    if (validSubjectIds.length === 0) return
+
+    const requestedDisciplineIds = Array.isArray(navState.disciplineIds) ? navState.disciplineIds : []
+    const validDisciplineIds = new Set(
+      requestedDisciplineIds.filter(disciplineId => allQuestions.some(q => q.discipline_id === disciplineId))
+    )
+
+    for (const subjectId of validSubjectIds) {
+      const disciplineId = subjects.find(s => s.id === subjectId)?.discipline_id
+      if (disciplineId) validDisciplineIds.add(disciplineId)
+    }
+
+    if (validDisciplineIds.size === 0) return
+
+    const subjectSet = new Set(validSubjectIds)
+    const poolSize = allQuestions.filter(q => subjectSet.has(q.subject_id)).length
+    if (poolSize === 0) return
+
+    const requestedCount = navState.questionCount ?? Math.min(25, poolSize)
+    const questionCount = Math.max(1, Math.min(requestedCount, poolSize))
+    const requestedTime = navState.timeMinutes ?? 30
+    const timeMinutes = Math.max(0, requestedTime)
+
+    autoStartFromStudyRef.current = true
+    setSimTab('avancado')
+    setAdvSubjects(subjectSet)
+    setAdvDiscs(new Set(validDisciplineIds))
+    setAdvQuestionCount(questionCount)
+    setAdvTimeMinutes(timeMinutes)
+    setExpandedDisc(Array.from(validDisciplineIds)[0] ?? null)
+
+    startAvancado({
+      discs: new Set(validDisciplineIds),
+      subjects: subjectSet,
+      questionCount,
+      timeMinutes,
+      discCounts: new Map(),
+    })
+  }, [loading, phase, location.state, allQuestions, subjects])
 
   function formatTime(secs: number) {
     const m = Math.floor(secs / 60)
@@ -192,17 +257,29 @@ export function Simulado() {
   )
   const canStartAdv = (advDiscs.size === 0 ? advEligibleDiscs.length : advDiscs.size) >= 2
 
-  function startAvancado() {
-    const discsToUse = advDiscs.size > 0 ? [...advDiscs] : advEligibleDiscs.map(d => d.id)
-    const hasPerDiscLimits = advDiscs.size > 0 && [...advDiscs].some(id => advDiscCounts.has(id))
+  function startAvancado(overrides?: {
+    discs?: Set<string>
+    subjects?: Set<string>
+    questionCount?: number
+    timeMinutes?: number
+    discCounts?: Map<string, number>
+  }) {
+    const selectedDiscs = overrides?.discs ?? advDiscs
+    const selectedSubjects = overrides?.subjects ?? advSubjects
+    const selectedQuestionCount = overrides?.questionCount ?? advQuestionCount
+    const selectedTimeMinutes = overrides?.timeMinutes ?? advTimeMinutes
+    const selectedDiscCounts = overrides?.discCounts ?? advDiscCounts
+
+    const discsToUse = selectedDiscs.size > 0 ? [...selectedDiscs] : advEligibleDiscs.map(d => d.id)
+    const hasPerDiscLimits = selectedDiscs.size > 0 && [...selectedDiscs].some(id => selectedDiscCounts.has(id))
     const bySubject = new Map<string, Question[]>()
     let cappedTotal = 0
 
-    for (const discId of discsToUse) {
+      for (const discId of discsToUse) {
       let discQs = allQuestions.filter(q => q.discipline_id === discId)
-      if (advSubjects.size > 0) discQs = discQs.filter(q => advSubjects.has(q.subject_id))
-      if (hasPerDiscLimits && advDiscCounts.has(discId)) {
-        const limit = advDiscCounts.get(discId)!
+      if (selectedSubjects.size > 0) discQs = discQs.filter(q => selectedSubjects.has(q.subject_id))
+      if (hasPerDiscLimits && selectedDiscCounts.has(discId)) {
+        const limit = selectedDiscCounts.get(discId)!
         discQs = shuffle(discQs).slice(0, Math.min(limit, discQs.length))
       }
       cappedTotal += discQs.length
@@ -212,9 +289,11 @@ export function Simulado() {
       }
     }
 
-    const total = hasPerDiscLimits ? cappedTotal : Math.min(advQuestionCount, cappedTotal)
+    const total = hasPerDiscLimits ? cappedTotal : Math.min(selectedQuestionCount, cappedTotal)
+    if (total <= 0) return
     const qs = buildInterleavedQuestions(bySubject, total)
-    launchRun(qs, advTimeMinutes, true)
+    if (qs.length === 0) return
+    launchRun(qs, selectedTimeMinutes, true)
   }
 
   function launchRun(qs: Question[], mins: number, isAdv: boolean) {
@@ -992,7 +1071,7 @@ export function Simulado() {
               <p className="text-center text-sm text-muted-foreground py-4">Nenhuma questão disponível com a seleção atual.</p>
             ) : (
               <button
-                onClick={startAvancado}
+                onClick={() => startAvancado()}
                 disabled={!canStartAdv}
                 className="rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
               >

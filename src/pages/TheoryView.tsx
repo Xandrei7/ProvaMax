@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { BookOpen, PlayCircle, ListVideo } from 'lucide-react'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { BookOpen, PlayCircle, ListVideo, PlusCircle, Settings } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
+import { useAuth } from '@/contexts/AuthContext'
 import { getTheoriesBySubject } from '@/lib/theoryService'
 import { getSubjects } from '@/lib/dataService'
 import { sanitizeTheoryHtml } from '@/lib/richText'
@@ -76,6 +77,13 @@ function VideoCard({ url }: { url: string }) {
 
 export function TheoryView() {
   const { subjectId } = useParams<{ subjectId: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { isAdmin } = useAuth()
+
+  const partId = location.state?.partId
+  const tipo = location.state?.tipo || 'teoria'
+
   const [theories, setTheories] = useState<Theory[]>([])
   const [subject, setSubject] = useState<Subject | null>(null)
   const [loading, setLoading] = useState(true)
@@ -105,7 +113,37 @@ export function TheoryView() {
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
           </div>
         ) : theories.length === 0 ? (
-          <p className="py-12 text-center text-muted-foreground">Nenhuma teoria cadastrada para este assunto.</p>
+          <div className="py-12 flex flex-col items-center gap-4 text-center">
+            <p className="text-muted-foreground">Nenhuma teoria cadastrada para este assunto.</p>
+            {isAdmin && subject && (
+              <div className="flex flex-col gap-2 w-full max-w-xs mt-4">
+                <button
+                  onClick={() => navigate('/admin', {
+                    state: {
+                      createTheory: {
+                        disciplineId: subject.discipline_id,
+                        subjectId: subject.id,
+                        partId: partId || '',
+                        title: tipo === 'lei_seca' ? `Lei Seca - ${subject.name}` : subject.name,
+                        content: tipo === 'lei_seca' ? `Trechos da lei seca: ${subject.name}\n\nPontos de atencao:\n-\n\nObservacoes:` : `Resumo teorico: ${subject.name}\n\nPontos-chave:\n-\n\nObservacoes:`
+                      }
+                    }
+                  })}
+                  className="flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-3 rounded-xl font-medium transition-colors"
+                >
+                  <PlusCircle size={18} />
+                  Nova {tipo === 'lei_seca' ? 'lei seca' : 'teoria'}
+                </button>
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="flex items-center justify-center gap-2 bg-muted text-muted-foreground hover:bg-muted/80 px-4 py-3 rounded-xl font-medium transition-colors border border-border"
+                >
+                  <Settings size={18} />
+                  Ir para Admin
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex flex-col gap-3">
             {theories.map(theory => (

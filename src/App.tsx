@@ -19,6 +19,7 @@ import { Simulado } from '@/pages/Simulado'
 import { SimuladoDetail } from '@/pages/SimuladoDetail'
 import { TheoryView } from '@/pages/TheoryView'
 import { SubjectParts } from '@/pages/SubjectParts'
+import { StudyNow } from '@/pages/StudyNow'
 import { NotFound } from '@/pages/NotFound'
 
 function Spinner() {
@@ -81,6 +82,7 @@ function AppRoutes() {
       <Route path="/stats" element={<ProtectedRoute><Stats /></ProtectedRoute>} />
       <Route path="/simulado" element={<ProtectedRoute><Simulado /></ProtectedRoute>} />
       <Route path="/simulado/:simuladoId" element={<ProtectedRoute><SimuladoDetail /></ProtectedRoute>} />
+      <Route path="/study-now" element={<ProtectedRoute><StudyNow /></ProtectedRoute>} />
 
       {/* Admin only */}
       <Route path="/import" element={<ProtectedRoute><AdminRoute><Import /></AdminRoute></ProtectedRoute>} />

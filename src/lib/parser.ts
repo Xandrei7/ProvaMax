@@ -36,39 +36,89 @@ function isConsonant(char: string): boolean {
   return /[BCDFGHJKLMNPQRSTVWXYZÇ]/i.test(char)
 }
 
-function shouldMergeDetachedFinalVowel(prevPlain: string, vowel: string, nextPlain: string): boolean {
-  const v = vowel.toLowerCase()
-  const nextIsBoundary = nextPlain === '' || /^[,.;:!?)}\]]/.test(nextPlain)
+function isAccentedVowel(char: string): boolean {
+  return /[ÁÉÍÓÚÂÊÔÃÕÀÜ]/i.test(char)
+}
 
-  if (/^[A-Z]{2,}$/.test(prevPlain) && /^[AEIOU]$/.test(vowel) && nextIsBoundary) {
-    return true
+/**
+ * Letras únicas que são palavras autônomas no português.
+ * Nunca devem ser fundidas com a linha/token anterior — são artigos,
+ * conjunções, preposições ou formas verbais reais, não artefatos de PDF.
+ */
+const PT_STANDALONE_LETTERS = new Set(['a', 'e', 'o', 'é', 'à', 'ó', 'A', 'E', 'O', 'É', 'À', 'Ó'])
+
+function getLastPlainWord(line: string): string {
+  const plain = stripInlineFormatting(line).trim()
+  const match = plain.match(/([A-Za-zÀ-ÿ]+)[,.;:!?)}\]]*$/)
+  return match ? match[1] : ''
+}
+
+function getLastPlainLetter(line: string): string {
+  const plain = stripInlineFormatting(line).trim()
+  const match = plain.match(/([A-Za-zÀ-ÿ])[,.;:!?)}\]]*$/)
+  return match ? match[1] : ''
+}
+
+function hasTerminalPunctuation(line: string): boolean {
+  const plain = stripInlineFormatting(line).trim()
+  return /[.!?:;]$/.test(plain)
+}
+
+function extractLeadingDetachedLetter(line: string): { letter: string; rest: string } | null {
+  const plain = stripInlineFormatting(line).trim()
+  const match = plain.match(/^([a-zà-ÿ])\s+(.+)$/)
+  if (!match) return null
+  return { letter: match[1], rest: match[2].trim() }
+}
+
+function shouldMergeLeadingDetachedLetter(prevLine: string, currentLine: string): boolean {
+  const detached = extractLeadingDetachedLetter(currentLine)
+  if (!detached) return false
+
+  // Palavras autônomas do português jamais são a última letra "fugitiva" de um PDF.
+  if (PT_STANDALONE_LETTERS.has(detached.letter)) return false
+
+  const prevWord = getLastPlainWord(prevLine)
+  if (!prevWord) return false
+
+  const prevLast = getLastPlainLetter(prevLine)
+  if (!prevLast) return false
+  if (hasTerminalPunctuation(prevLine)) return false
+  if (!/^[a-zà-ÿ]/.test(detached.rest)) return false
+
+  if (isConsonant(detached.letter)) {
+    return prevWord.length >= 3 && isVowel(prevLast)
   }
 
-  if (v === 'a') {
-    if (/(?:et|rt|iv|id|ç|cas)$/i.test(prevPlain)) return true
-    if (/(?:or)$/i.test(prevPlain) && nextIsBoundary) return true
-    return false
-  }
-
-  if (v === 'e') {
-    return /(?:gent|ment|quent|nt|idad)$/i.test(prevPlain)
-  }
-
-  if (v === 'o') {
-    return /(?:rt|iv)$/i.test(prevPlain) && nextIsBoundary
+  if (isVowel(detached.letter)) {
+    if (prevWord.length < 4) return false
+    return isConsonant(prevLast) || isAccentedVowel(prevLast)
   }
 
   return false
 }
 
-function inferMissingFinalVowel(plainToken: string, nextPlain: string): string {
-  const atBoundary = nextPlain === '' || /^[,.;:!?)}\]]/.test(nextPlain)
-  if (!atBoundary) return ''
+function shouldMergeDetachedFinalLetter(prevPlain: string, letter: string, nextPlain: string): boolean {
+  const nextIsBoundary = nextPlain === '' || /^[,.;:!?)}\]]/.test(nextPlain)
+  if (!nextIsBoundary) return false
+  if (!prevPlain || !letter) return false
 
-  if (/(?:gent|ment|quent|idad)$/i.test(plainToken)) return 'e'
-  if (/(?:tiv|ç|v[aá]lid)$/i.test(plainToken)) return 'a'
+  const prevLast = prevPlain.slice(-1)
+  if (!/[A-Za-zÀ-ÿ]/.test(prevLast)) return false
 
-  return ''
+  // Mantém siglas que vieram quebradas (ex.: "D N A" -> "DNA").
+  if (/^[A-Z]{2,}$/.test(prevPlain)) {
+    return /^[A-Z]$/.test(letter)
+  }
+
+  if (!/^[a-zà-ÿ]$/.test(letter)) return false
+
+  // Quebra real de fim de palavra tende a alternar classe fonética
+  // (consoante + vogal ou vogal + consoante).
+  if (isVowel(letter)) return isConsonant(prevLast)
+  if (isConsonant(letter)) return isVowel(prevLast)
+
+  return false
 }
 
 function splitWordAndPunctuation(token: string): { word: string; punctuation: string } | null {
@@ -95,31 +145,15 @@ function mergeSplitFinalLettersInLine(line: string): string {
     const nextPlain = stripInlineFormatting(nextRaw).trim()
     const nextContextPlain = tokenParts?.punctuation ? tokenParts.punctuation : nextPlain
     const letterCandidate = tokenParts && tokenParts.word.length === 1 ? tokenParts.word : ''
-    const acronymMergeCandidate =
-      /^[A-Z]{2,}$/.test(prevWord) &&
-      /^[AEIOU]$/.test(letterCandidate)
-
     const canMergeWithPrev =
       !!prevRaw &&
       !!letterCandidate &&
-      isVowel(letterCandidate) &&
-      (
-        acronymMergeCandidate ||
-        (prevWord.length >= 2 && isConsonant(prevWord.slice(-1)))
-      ) &&
-      shouldMergeDetachedFinalVowel(prevWord, letterCandidate, nextContextPlain)
+      prevWord.length >= 2 &&
+      shouldMergeDetachedFinalLetter(prevWord, letterCandidate, nextContextPlain)
 
     if (canMergeWithPrev) {
       merged[merged.length - 1] = `${prevRaw}${token}`
       continue
-    }
-
-    if (!token.includes('<') && tokenParts) {
-      const missing = inferMissingFinalVowel(tokenParts.word, nextPlain)
-      if (missing) {
-        merged.push(`${tokenParts.word}${missing}${tokenParts.punctuation}`)
-        continue
-      }
     }
 
     merged.push(token)
@@ -134,9 +168,21 @@ function mergeDanglingLetterLines(lines: string[]): string[] {
     const line = mergeSplitFinalLettersInLine(rawLine.trim())
     if (!line) continue
 
+    if (merged.length > 0 && shouldMergeLeadingDetachedLetter(merged[merged.length - 1], line)) {
+      const detached = extractLeadingDetachedLetter(line)
+      if (detached) {
+        merged[merged.length - 1] = `${merged[merged.length - 1]}${detached.letter} ${detached.rest}`
+        continue
+      }
+    }
+
     if (isSingleLetterLine(line) && merged.length > 0 && endsWithLetter(merged[merged.length - 1])) {
-      merged[merged.length - 1] += line
-      continue
+      const plainLetter = stripInlineFormatting(line).trim()
+      // Não fundir palavras autônomas do português (artigos, conjunções, verbos)
+      if (!PT_STANDALONE_LETTERS.has(plainLetter)) {
+        merged[merged.length - 1] += line
+        continue
+      }
     }
 
     merged.push(line)

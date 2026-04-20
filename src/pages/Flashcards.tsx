@@ -21,11 +21,13 @@ import {
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { getDisciplines, getFlashcards, getSubjects, reviewFlashcard } from '@/lib/dataService'
+import { buildStudyNowQueue, formatStudyNowLine } from '@/lib/flashcardStudyNow'
 import { useAuth } from '@/contexts/AuthContext'
 import type { Discipline, Flashcard, Subject } from '@/types'
 
 type Phase = 'overview' | 'reviewing' | 'finished'
-type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only' | 'critical' | 'simulado_errors'
+type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only' | 'critical' | 'simulado_errors' | 'study_now'
+type SessionSize = 10 | 20 | 40
 type DisplayMode = 'quick' | 'deep'
 type QuickSection = 'all' | 'new' | 'reviewing' | 'mastered' | 'simulado' | 'study'
 type ReviewAction = 'correct' | 'easy' | 'wrong' | 'skip' | 'mastered'
@@ -157,7 +159,10 @@ export function Flashcards() {
   const [sourceFilter, setSourceFilter] = useState<'all' | Flashcard['source_type']>(() => getSourceFilterFromParam(searchParams.get('source')))
 
   const [displayMode, setDisplayMode] = useState<DisplayMode>('deep')
-  const [reviewDiscipline, setReviewDiscipline] = useState('all')
+  // Se vier de /study-now com ?disciplineId=xxx, pré-seleciona a disciplina
+  const initDisciplineId = searchParams.get('disciplineId') ?? ''
+  const [reviewDiscipline, setReviewDiscipline] = useState(initDisciplineId || 'all')
+  const [sessionSize, setSessionSize] = useState<SessionSize>(20)
 
   const [dueCards, setDueCards] = useState<Flashcard[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -196,6 +201,12 @@ export function Flashcards() {
     }
     loadData()
   }, [user])
+
+  // Auto-inicia revisão quando chega com ?disciplineId= (ex.: vindo de StudyNow)
+  useEffect(() => {
+    if (loading || !initDisciplineId || flashcards.length === 0) return
+    startReview('smart', initDisciplineId)
+  }, [loading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const disciplineNameById = useMemo(
     () => new Map(disciplines.map(d => [d.id, d.name])),
@@ -239,6 +250,12 @@ export function Flashcards() {
       return eliteCards.filter(c => crits.has(c.question_id)).length
     } catch { return 0 }
   })()
+
+  // ── "Estudar Agora" — composição da fila do dia ─────────────────────────────
+  const studyNowData = useMemo(() => {
+    const critIds = getCriticalIds()
+    return buildStudyNowQueue(eliteCards, reviewDiscipline, critIds, sessionSize)
+  }, [eliteCards, reviewDiscipline, sessionSize]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Filtros da lista ────────────────────────────────────────────────────────
   const sectionFiltered = useMemo(() => {
@@ -316,6 +333,19 @@ export function Flashcards() {
       return
     }
     setActiveReviewMode(mode)
+    setDueCards(queue)
+    setCurrentIndex(0)
+    setShowAnswer(false)
+    setPhase('reviewing')
+  }
+
+  function startStudyNow() {
+    const { queue } = studyNowData
+    if (queue.length === 0) {
+      setPhase('finished')
+      return
+    }
+    setActiveReviewMode('study_now')
     setDueCards(queue)
     setCurrentIndex(0)
     setShowAnswer(false)
@@ -477,6 +507,11 @@ export function Flashcards() {
             {activeReviewMode === 'simulado_errors' && (
               <span className="text-xs text-sky-600 font-semibold">Erros de simulados</span>
             )}
+            {activeReviewMode === 'study_now' && (
+              <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
+                <Zap size={11} /> Estudar Agora
+              </span>
+            )}
           </div>
 
           {/* Frente do card */}
@@ -589,6 +624,74 @@ export function Flashcards() {
       <Header title="Flashcards" showBack={false} />
       <main className="mx-auto w-full max-w-lg flex-1 px-4 py-5 pb-28">
         <div className="flex flex-col gap-5">
+
+          {/* ── META DE HOJE — "Estudar Agora" ───────────────────────────────── */}
+          <div
+            className="rounded-2xl p-5"
+            style={{
+              background: '#F4FAF6',
+              border: '1.5px solid #B7E4C7',
+              boxShadow: '0 2px 12px 0 rgba(22,163,74,0.08)',
+            }}
+          >
+            {/* Cabeçalho */}
+            <div className="flex items-center gap-2 mb-1">
+              <Zap size={16} style={{ color: '#166534' }} />
+              <p
+                className="text-xs font-extrabold uppercase tracking-widest"
+                style={{ color: '#166534' }}
+              >
+                Meta de hoje
+              </p>
+            </div>
+            <p className="text-xs mb-4" style={{ color: '#475569' }}>
+              O ProvaMax escolhe os cards mais importantes de hoje
+            </p>
+
+            {/* Seletor de tamanho */}
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xs font-medium" style={{ color: '#475569' }}>Sessão:</span>
+              {([10, 20, 40] as const).map(n => (
+                <button
+                  key={n}
+                  onClick={() => setSessionSize(n)}
+                  className="rounded-full px-3 py-1 text-xs font-bold transition-all"
+                  style={
+                    sessionSize === n
+                      ? { background: '#166534', color: '#FFFFFF', border: '1.5px solid #166534' }
+                      : { background: '#FFFFFF', color: '#1E293B', border: '1.5px solid #B7E4C7' }
+                  }
+                >
+                  {n}
+                </button>
+              ))}
+              <span className="text-xs font-medium" style={{ color: '#475569' }}>cards</span>
+            </div>
+
+            {/* Linha de apoio com breakdown */}
+            {studyNowData.total > 0 && (
+              <p className="text-xs mb-4 leading-relaxed font-medium" style={{ color: '#1E293B' }}>
+                {formatStudyNowLine(studyNowData.total, studyNowData.breakdown)}
+              </p>
+            )}
+
+            {/* Botão principal */}
+            <button
+              onClick={startStudyNow}
+              disabled={studyNowData.total === 0}
+              className="w-full rounded-xl py-4 font-bold text-base tracking-wide flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-40"
+              style={{ background: '#16A34A', color: '#FFFFFF' }}
+            >
+              <Zap size={18} />
+              Estudar Agora
+            </button>
+
+            {studyNowData.total === 0 && (
+              <p className="text-center text-xs mt-3" style={{ color: '#475569' }}>
+                Nenhum card urgente no momento. Volte mais tarde ou use a Revisão Inteligente.
+              </p>
+            )}
+          </div>
 
           {/* MODO ELITE Banner */}
           <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/10 to-primary/5 p-5">

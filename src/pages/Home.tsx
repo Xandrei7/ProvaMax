@@ -5,11 +5,13 @@ import { AppHeader } from '@/components/AppHeader'
 import { BottomNav } from '@/components/BottomNav'
 import { RankingSection } from '@/components/RankingSection'
 import { ProgressBar } from '@/components/ProgressBar'
-import { getDisciplines, getSubjects, getQuestions } from '@/lib/dataService'
+import { getDisciplines, getSubjects, getQuestions, getSubjectParts } from '@/lib/dataService'
 import { useStudy } from '@/contexts/StudyContext'
 import { useAuth } from '@/contexts/AuthContext'
-import type { Discipline, Subject, Question } from '@/types'
+import type { Discipline, Subject, Question, SubjectPart } from '@/types'
 import { DISCIPLINE_GROUPS, getGroupForDiscipline, type DisciplineGroup, type DisciplineSubgroup } from '@/config/disciplineGroups'
+import { StudyNowCard } from '@/components/StudyNowCard'
+import { ExamCountdownCard } from '@/components/ExamCountdownCard'
 
 interface DisciplineCard {
   discipline: Discipline
@@ -26,18 +28,27 @@ export function Home() {
   const [selectedGroup, setSelectedGroup] = useState<DisciplineGroup | null>(null)
   const [selectedSubgroup, setSelectedSubgroup] = useState<DisciplineSubgroup | null>(null)
 
+  // Dados brutos para o StudyNowCard
+  const [allDisciplines, setAllDisciplines] = useState<Discipline[]>([])
+  const [allSubjects, setAllSubjects] = useState<Subject[]>([])
+  const [allParts, setAllParts] = useState<SubjectPart[]>([])
+
   useEffect(() => {
     async function load() {
-      const [disciplines, subjects, questions] = await Promise.all([
+      const [disciplines, subjects, questions, parts] = await Promise.all([
         getDisciplines(),
         getSubjects(),
         getQuestions(),
+        getSubjectParts(),
       ])
       setCards(disciplines.map(d => ({
         discipline: d,
         subjects: subjects.filter(s => s.discipline_id === d.id),
         questions: questions.filter(q => q.discipline_id === d.id),
       })))
+      setAllDisciplines(disciplines)
+      setAllSubjects(subjects)
+      setAllParts(parts as SubjectPart[])
       setLoading(false)
     }
     load()
@@ -277,6 +288,15 @@ export function Home() {
           /* ── Vista inicial: pastas ── */
           <div className="flex flex-col gap-3">
 
+            {/* Card Estudar Agora */}
+            {!loading && (
+              <StudyNowCard
+                disciplines={allDisciplines}
+                subjects={allSubjects}
+                parts={allParts}
+              />
+            )}
+
             {/* Import button — admin only */}
             {isAdmin && (
               <button
@@ -365,6 +385,9 @@ export function Home() {
 
             {/* Ranking dos usuários — visível na vista inicial */}
             <RankingSection />
+
+            {/* Contagem regressiva para a prova */}
+            <ExamCountdownCard />
           </div>
         )}
       </main>

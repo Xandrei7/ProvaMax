@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { extractEmphasisFromHtml, sanitizeTheoryHtml } from '@/lib/richText'
 import { Plus, Pencil, Trash2, Check, X, Users, BookOpen, FileText, AlertTriangle, Search, ChevronUp, ChevronDown, Layers } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -14,10 +15,21 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { Discipline, Subject, SubjectPart, Question, Profile, QuestionType, Theory } from '@/types'
 import { getAllTheories, createTheory, updateTheory, deleteTheory } from '@/lib/theoryService'
+// Fingerprint para detecção de duplicatas: strip HTML + prefixo banca/ano + lowercase
+function _dupFp(statement: string, options?: { letter: string; text: string }[] | null): string {
+  const clean = (s: string) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+  let core = clean(statement)
+  core = core.replace(/^\s*\([^)]{0,150}\)\s*/, '')
+  core = core.replace(/^\s*\[[^\]]{0,150}\]\s*/, '')
+  core = core.replace(/^(?:[\w/]+\s*[-–]\s*){2,}/i, '').trim()
+  return core + '\x01' + (options ?? []).map(o => clean(o.text)).join('\x00')
+}
 
 type Tab = 'disciplines' | 'subjects' | 'parts' | 'questions' | 'users' | 'reports' | 'theories'
 
 export function Admin() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('disciplines')
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
@@ -59,8 +71,10 @@ export function Admin() {
   const [qFilterPart, setQFilterPart] = useState('')
   const [qFilterType, setQFilterType] = useState<'' | QuestionType>('')
   const [qSort, setQSort] = useState<'recent' | 'discipline' | 'subject' | 'order'>('recent')
+  const [qShowDuplicates, setQShowDuplicates] = useState(false)
   const [selectedQIds, setSelectedQIds] = useState<Set<string>>(new Set())
   const [pendingOrder, setPendingOrder] = useState<Map<string, number> | null>(null)
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [showInlineSub, setShowInlineSub] = useState(false)
   const [inlineSubName, setInlineSubName] = useState('')
 
@@ -112,6 +126,25 @@ export function Admin() {
 
   useEffect(() => { loadAll() }, [])
   useEffect(() => { if (activeTab === 'theories') loadTheories() }, [activeTab])
+
+  useEffect(() => {
+    if (location.state?.createTheory) {
+      const { disciplineId, subjectId, title, content } = location.state.createTheory
+      setActiveTab('theories')
+      setTFilterDisc(disciplineId || '')
+      setTFilterSub(subjectId || '')
+      setTForm({
+        discipline_id: disciplineId || '',
+        subject_id: subjectId || '',
+        title: title || '',
+        content_html: content || '',
+        youtube_url: '',
+        complementary_text: '',
+      })
+      navigate('/admin', { replace: true, state: {} })
+    }
+  }, [location.state, navigate])
+
   useEffect(() => {
     if (!qForm) return
     if (!qCommentRef.current) return
@@ -246,9 +279,24 @@ export function Admin() {
     ? parts.filter(p => p.subject_id === qFilterSubject)
     : []
 
+  const { duplicateFingerprints, duplicateQCount } = (() => {
+    const fpCount = new Map<string, number>()
+    for (const q of questions) {
+      const fp = _dupFp(q.statement, q.options)
+      fpCount.set(fp, (fpCount.get(fp) ?? 0) + 1)
+    }
+    const dupes = new Set<string>()
+    let count = 0
+    for (const [fp, c] of fpCount) {
+      if (c > 1) { dupes.add(fp); count += c }
+    }
+    return { duplicateFingerprints: dupes, duplicateQCount: count }
+  })()
+
   const filteredQuestions = (() => {
     const term = qSearch.trim().toLowerCase()
     let result = questions.filter(q => {
+      if (qShowDuplicates && !duplicateFingerprints.has(_dupFp(q.statement, q.options))) return false
       if (qFilterDisc && q.discipline_id !== qFilterDisc) return false
       if (qFilterSubject && q.subject_id !== qFilterSubject) return false
       if (qFilterPart && q.part_id !== qFilterPart) return false
@@ -284,6 +332,24 @@ export function Admin() {
       })
     }
     return result
+  })()
+
+  // Posição real dentro do recorte atual (disc/assunto/parte), sem texto de busca nem tipo
+  const questionPositions = (() => {
+    const contextFiltered = questions.filter(q => {
+      if (qFilterDisc && q.discipline_id !== qFilterDisc) return false
+      if (qFilterSubject && q.subject_id !== qFilterSubject) return false
+      if (qFilterPart && q.part_id !== qFilterPart) return false
+      return true
+    })
+    const sorted = [...contextFiltered].sort((a, b) => {
+      const aOrder = pendingOrder?.get(a.id) ?? a.sort_order ?? 0
+      const bOrder = pendingOrder?.get(b.id) ?? b.sort_order ?? 0
+      return aOrder - bOrder
+    })
+    const map = new Map<string, number>()
+    sorted.forEach((q, i) => map.set(q.id, i + 1))
+    return map
   })()
 
   const allVisibleSelected =
@@ -330,9 +396,12 @@ export function Admin() {
       return q.correct_answer
     }
 
-    const text = selected.map((q, i) =>
-      `${i + 1}.\nEnunciado: ${q.statement}\nGabarito: ${gabarito(q)}\nComentário: ${q.comment ?? ''}`
-    ).join('\n\n')
+    const text = selected.map((q, i) => {
+      const opts = q.options && q.options.length > 0
+        ? '\n' + q.options.map(o => `${o.letter}) ${o.text}`).join('\n')
+        : ''
+      return `${i + 1}.\nEnunciado: ${q.statement}${opts}\nGabarito: ${gabarito(q)}\nComentário: ${q.comment ?? ''}`
+    }).join('\n\n')
 
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).then(
@@ -399,6 +468,16 @@ export function Admin() {
 
   function handleCancelOrder() {
     setPendingOrder(null)
+  }
+
+  function handleDragReorder(fromIdx: number, toIdx: number) {
+    if (fromIdx === toIdx) return
+    const ids = filteredQuestions.map(q => q.id)
+    const [moved] = ids.splice(fromIdx, 1)
+    ids.splice(toIdx, 0, moved)
+    const newMap = new Map(pendingOrder ?? [])
+    ids.forEach((id, i) => newMap.set(id, i))
+    setPendingOrder(newMap)
   }
 
   function fallbackCopy(text: string) {
@@ -1018,6 +1097,17 @@ export function Admin() {
                   <option value="subject">Por assunto</option>
                   <option value="order">Por ordem (sort_order)</option>
                 </select>
+                <select
+                  value={qShowDuplicates ? 'duplicates' : ''}
+                  onChange={e => setQShowDuplicates(e.target.value === 'duplicates')}
+                  className={cn(
+                    'rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary',
+                    qShowDuplicates ? 'border-orange-400 text-orange-600' : 'border-border'
+                  )}
+                >
+                  <option value="">Todas as questões</option>
+                  <option value="duplicates">{`Só duplicadas${duplicateQCount > 0 ? ` (${duplicateQCount})` : ''}`}</option>
+                </select>
               </div>
             </div>
 
@@ -1085,7 +1175,7 @@ export function Admin() {
 
             {/* Question list — com edição inline */}
             <div className="flex flex-col gap-2">
-              {filteredQuestions.map(q => {
+              {filteredQuestions.map((q, visibleIdx) => {
                 const sub = subjects.find(s => s.id === q.subject_id)
                 const disc = disciplines.find(d => d.id === q.discipline_id)
 
@@ -1100,8 +1190,22 @@ export function Admin() {
                 }
 
                 return (
-                  <div key={q.id} className={cn('rounded-xl border bg-card p-3 transition-colors', selectedQIds.has(q.id) ? 'border-primary/50 bg-primary/5' : 'border-border')}>
+                  <div
+                    key={q.id}
+                    draggable={qSort === 'order'}
+                    onDragStart={() => { setDragIdx(visibleIdx) }}
+                    onDragOver={e => { if (qSort === 'order') e.preventDefault() }}
+                    onDrop={() => { if (dragIdx !== null) { handleDragReorder(dragIdx, visibleIdx); setDragIdx(null) } }}
+                    onDragEnd={() => setDragIdx(null)}
+                    className={cn(
+                      'rounded-xl border bg-card p-3 transition-colors',
+                      selectedQIds.has(q.id) ? 'border-primary/50 bg-primary/5' : 'border-border',
+                      qSort === 'order' && 'cursor-grab active:cursor-grabbing',
+                      dragIdx === visibleIdx && 'opacity-40'
+                    )}
+                  >
                     <div className="flex items-start gap-2">
+                      <span className="text-xs font-mono text-muted-foreground w-6 text-right shrink-0 mt-0.5 select-none">{questionPositions.get(q.id) ?? visibleIdx + 1}</span>
                       <input
                         type="checkbox"
                         checked={selectedQIds.has(q.id)}
