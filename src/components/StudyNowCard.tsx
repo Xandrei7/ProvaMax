@@ -4,7 +4,7 @@ import { Play, BookOpen, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import type { Discipline, Subject, SubjectPart } from '@/types'
 import {
   getCurrentWeek, getCurrentDayKey, buildDaySummaryForWeek,
-  PLAN_TOTAL_WEEKS, getWeekMeta, loadSavedPlanWeek, savePlanWeek,
+  PLAN_TOTAL_WEEKS, getWeekMeta, loadSavedPlanWeek, savePlanWeek, loadSession, DEFAULT_PLAN_WEEK,
 } from '@/lib/studyNowUtils'
 import { DAY_LABELS } from '@/data/studyPlan'
 import type { StudyDayKey } from '@/data/studyPlan'
@@ -20,15 +20,19 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
   const autoWeek = getCurrentWeek()
   const today = getCurrentDayKey()
 
-  const [selectedWeek, setSelectedWeek] = useState(() => loadSavedPlanWeek() ?? autoWeek)
-
-  useEffect(() => { savePlanWeek(selectedWeek) }, [selectedWeek])
+  const [selectedWeek, setSelectedWeek] = useState(() => loadSavedPlanWeek() ?? DEFAULT_PLAN_WEEK)
   const [showWeekPicker, setShowWeekPicker] = useState(false)
   const weekScrollRef = useRef<HTMLDivElement>(null)
 
-  const summary = buildDaySummaryForWeek(selectedWeek, today as StudyDayKey, disciplines, subjects, parts)
+  const activeSession = loadSession()
+  const selectedWeekSessionDay =
+    activeSession && !activeSession.finished && activeSession.semana === selectedWeek
+      ? activeSession.dia
+      : null
+  const selectedDay = (selectedWeekSessionDay ?? today) as StudyDayKey
+
+  const summary = buildDaySummaryForWeek(selectedWeek, selectedDay, disciplines, subjects, parts)
   const weekMeta = getWeekMeta(selectedWeek)
-  const isAutoWeek = selectedWeek === autoWeek
 
   // Fecha picker ao clicar fora
   useEffect(() => {
@@ -53,9 +57,15 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
 
   const { hasActiveSession, missingTasks, totalTasks, nextTaskLabel, dia } = summary
 
+  function handleSelectWeek(week: number) {
+    setSelectedWeek(week)
+    savePlanWeek(week)
+  }
+
   function handlePlay() {
+    savePlanWeek(selectedWeek)
     navigate('/study-now', {
-      state: { semana: selectedWeek, dia: today },
+      state: { semana: selectedWeek, dia },
     })
   }
 
@@ -122,7 +132,6 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
             {/* Linha info: semana · dia · tarefas */}
             <p className="text-xs text-gray-500 mt-0.5">
               Semana {selectedWeek}
-              {!isAutoWeek && <span className="text-amber-600"> (manual)</span>}
               {' · '}{DAY_LABELS[dia]}
               {' · '}{totalTasks} tarefa{totalTasks !== 1 ? 's' : ''}
               {weekMeta.questoesMeta > 0 && (
@@ -169,9 +178,9 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
         <div className="mt-3 pt-3 border-t border-green-100" data-week-picker>
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Semana do plano</span>
-            {!isAutoWeek && (
+            {selectedWeek !== autoWeek && (
               <button
-                onClick={() => setSelectedWeek(autoWeek)}
+                onClick={() => handleSelectWeek(autoWeek)}
                 className="text-[10px] text-green-600 hover:text-green-700 font-medium transition-colors"
               >
                 Usar semana atual ({autoWeek})
@@ -187,12 +196,11 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
           >
             {Array.from({ length: PLAN_TOTAL_WEEKS }, (_, i) => i + 1).map(w => {
               const isSelected = w === selectedWeek
-              const isAuto = w === autoWeek
               return (
                 <button
                   key={w}
                   data-selected={isSelected ? 'true' : undefined}
-                  onClick={() => setSelectedWeek(w)}
+                  onClick={() => handleSelectWeek(w)}
                   className="shrink-0 flex flex-col items-center justify-center rounded-xl transition-all"
                   style={
                     isSelected
@@ -201,13 +209,6 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
                           background: 'linear-gradient(135deg, #16a34a, #22c55e)',
                           boxShadow: '0 2px 8px rgba(34,197,94,0.4)',
                           color: 'white',
-                        }
-                      : isAuto
-                      ? {
-                          width: 44, height: 44,
-                          border: '1.5px solid rgba(34,197,94,0.5)',
-                          background: '#f0fdf4',
-                          color: '#16a34a',
                         }
                       : {
                           width: 44, height: 44,
@@ -218,7 +219,7 @@ export function StudyNowCard({ disciplines, subjects, parts }: Props) {
                   }
                 >
                   <span className="text-[11px] font-bold leading-none">{w}</span>
-                  {isAuto && !isSelected && (
+                  {isSelected && (
                     <span className="text-[8px] leading-none mt-0.5 font-medium opacity-70">hoje</span>
                   )}
                 </button>

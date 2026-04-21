@@ -220,27 +220,57 @@ export function parseQuestionsText(rawText: string): ParsedQuestion[] {
 // Detecta texto de apoio/associado num bloco de texto.
 // Heurística progressiva: sinais fortes primeiro, depois tamanho como fallback.
 // ──────────────────────────────────────────────────────────────────────────────
+function cleanAssociatedText(block: string): string {
+  const withoutHeader = block.replace(/GABARITOS?\s*COMENTADOS?/gi, ' ')
+
+  // Remove apenas duplicações óbvias de numeração no mesmo ponto.
+  const withoutDuplicatedNumbering = withoutHeader.replace(
+    /(^|\n)[ \t]*(\d{1,3})\s*[.)\-–—:]\s*\2\s*[.)\-–—:]\s*/g,
+    '$1',
+  )
+
+  return withoutDuplicatedNumbering
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function detectAssociatedText(block: string): string | null {
-  const trimmed = block.trim()
-  if (!trimmed) return null
+  const cleaned = cleanAssociatedText(block)
+  if (!cleaned) return null
 
-  // Ruído muito curto (ex: título solto, número isolado)
-  if (trimmed.length < 30) return null
+  // Sinal 1: instruções explícitas — strip tags HTML antes de testar (ex.: <u>Atenção:</u>)
+  const strippedFirst = stripInlineFormatting(cleaned)
+  if (/^aten[çc][aã]o\s*:/i.test(strippedFirst)) return cleaned
+  if (/^considere\s*:/i.test(strippedFirst)) return cleaned
 
-  // Sinal 1: instrução explícita comum em provas
-  if (/^aten[çc][aã]o\s*:/i.test(trimmed))                                      return trimmed
-  if (/^(?:leia|considere|com base|a partir|baseado|analise|observe|texto\s*[\d:–-])/i.test(trimmed)) return trimmed
-  if (/^(?:para responder|para as quest[õo]es|julgue|assinale)/i.test(trimmed))  return trimmed
+  // Sinal 2: presença de título [ ... ]
+  if (/\[[^\]\n]{3,}\]/.test(cleaned)) return cleaned
 
-  // Sinal 2: dois ou mais parágrafos com conteúdo real
-  const paragraphs = trimmed
+  // Sinal 3: referências típicas no final do bloco
+  if (/(?:\(\s*adaptado\s+de\s*:|adaptado\s+de\s*:|autor\s*:|obra\s*:|refer[êe]ncia\s*:?)\s*$/i.test(cleaned)) {
+    return cleaned
+  }
+  if (/(?:\(\s*adaptado\s+de\s*:|adaptado\s+de\s*:|autor\s*:|obra\s*:|refer[êe]ncia\s*:)/i.test(cleaned)) {
+    const tail = cleaned.slice(-220)
+    if (/(?:adaptado\s+de\s*:|autor\s*:|obra\s*:|refer[êe]ncia\s*:)/i.test(tail)) return cleaned
+  }
+
+  // Compatibilidade com gatilhos anteriores relevantes
+  if (/^(?:leia|com base|a partir|baseado|analise|observe|texto\s*[\d:–-])/i.test(cleaned)) return cleaned
+  if (/^(?:para responder|para as quest[õo]es|julgue|assinale)/i.test(cleaned)) return cleaned
+
+  // Sinal 4: dois ou mais parágrafos com conteúdo real
+  const paragraphs = cleaned
     .split(/\n\s*\n/)
     .map(p => p.trim())
     .filter(p => p.length > 15)
-  if (paragraphs.length >= 2) return trimmed
+  if (paragraphs.length >= 2) return cleaned
 
-  // Sinal 3: passagem única com substância (artigo, trecho, citação)
-  if (trimmed.length > 80) return trimmed
+  // Sinal 5: passagem única com substância (artigo, trecho, citação)
+  if (cleaned.length > 80) return cleaned
 
   return null
 }
@@ -335,9 +365,9 @@ function parseQuestionsSection(
     if (seq.length > 0) matches = seq
   }
 
-  // ── Contexto inicial: texto antes da primeira questão real ─────────────────
+  // ── Contexto pendente: texto antes da primeira questão real ────────────────
   const firstRealPos = matches[0].index ?? 0
-  let currentContext = detectAssociatedText(text.slice(0, firstRealPos))
+  let pendingAssociatedText = detectAssociatedText(text.slice(0, firstRealPos))
 
   const results: Omit<ParsedQuestion, 'correctAnswer' | 'comment'>[] = []
 
@@ -365,15 +395,18 @@ function parseQuestionsSection(
       statement,
       type:           isTrueFalse ? 'true_false' : 'multiple_choice',
       options:        isTrueFalse ? null : options,
-      associatedText: currentContext,
+      associatedText: pendingAssociatedText,
     })
+
+    // Texto associado é sempre consumido pela questão atual.
+    pendingAssociatedText = null
 
     // ── Contexto inter-questões ────────────────────────────────────────────
     // Se houver texto substancial após as alternativas desta questão,
     // ele se torna o novo contexto para as questões seguintes.
     if (trailingText) {
       const newContext = detectAssociatedText(trailingText)
-      if (newContext) currentContext = newContext
+      if (newContext) pendingAssociatedText = newContext
     }
   }
 

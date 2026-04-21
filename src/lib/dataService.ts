@@ -558,6 +558,35 @@ export async function deleteQuestion(id: string) {
   if (error) throw error
 }
 
+export async function batchMoveQuestions(
+  questionIds: string[],
+  destination: { disciplineId: string; subjectId: string; partId: string | null },
+): Promise<number> {
+  if (questionIds.length === 0) return 0
+
+  const ids = [...new Set(questionIds)]
+  const chunkSize = 200
+  let movedCount = 0
+
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const { data, error } = await supabase
+      .from('questions')
+      .update({
+        discipline_id: destination.disciplineId,
+        subject_id: destination.subjectId,
+        part_id: destination.partId,
+      })
+      .in('id', chunk)
+      .select('id')
+
+    if (error) throw error
+    movedCount += data?.length ?? 0
+  }
+
+  return movedCount
+}
+
 // -- PROFILES -----------------------------------------------------------------
 
 export async function getProfiles(): Promise<Profile[]> {

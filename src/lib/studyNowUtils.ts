@@ -8,6 +8,7 @@ import type { StudyTask, StudyDayKey, StudyDayPlan } from '@/data/studyPlan'
 
 export const PLAN_START_DATE = '2026-04-01'
 export const PLAN_TOTAL_WEEKS = 13
+export const DEFAULT_PLAN_WEEK = 1
 
 // ---------------------------------------------------------------------------
 // Semana e dia atuais
@@ -486,12 +487,18 @@ export function buildDaySummaryForWeek(
   subjects: Subject[],
   parts: SubjectPart[],
 ): DaySummary {
-  const plan = getDayPlan(semana, dia)
   const session = loadSession()
+  const activeSession = (
+    session &&
+    !session.finished &&
+    session.semana === semana
+  ) ? session : null
+  const effectiveDay = activeSession?.dia ?? dia
+  const plan = getDayPlan(semana, effectiveDay)
 
   if (!plan) {
     return {
-      semana, dia, totalTasks: 0, readyTasks: 0, missingTasks: 0,
+      semana, dia: effectiveDay, totalTasks: 0, readyTasks: 0, missingTasks: 0,
       questoesTotal: 0, hasActiveSession: false, nextTaskLabel: null,
     }
   }
@@ -501,19 +508,14 @@ export function buildDaySummaryForWeek(
   const missingTasks = resolved.filter(t => t.requiresManualSetup).length
   const questoesTotal = resolved.reduce((s, t) => s + (t.quantidade ?? 0), 0)
 
-  const hasActiveSession = !!(
-    session &&
-    !session.finished &&
-    session.semana === semana &&
-    session.dia === dia
-  )
+  const hasActiveSession = !!activeSession
 
-  const nextTask = hasActiveSession && session
-    ? resolved[session.currentTaskIndex]
+  const nextTask = hasActiveSession && activeSession
+    ? resolved[activeSession.currentTaskIndex]
     : resolved[0]
 
   return {
-    semana, dia, totalTasks: plan.tarefas.length, readyTasks, missingTasks,
+    semana, dia: effectiveDay, totalTasks: plan.tarefas.length, readyTasks, missingTasks,
     questoesTotal, hasActiveSession,
     nextTaskLabel: nextTask ? `${nextTask.disciplina} — ${nextTask.assunto.slice(0, 50)}` : null,
   }

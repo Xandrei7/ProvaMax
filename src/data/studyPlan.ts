@@ -187,6 +187,7 @@ export const studyPlan: StudyDayPlan[] = [
       { id: 's3_seg_2', disciplina: 'Direito Constitucional', assunto: 'Organização do Estado — consolidação', tipo: 'questoes', quantidade: 15 },
       { id: 's3_seg_3', disciplina: 'Direito Administrativo', assunto: 'Licitação 14.133 — ENTRADA teoria', tipo: 'teoria', quantidade: 15 },
       { id: 's3_seg_4', disciplina: 'Português', assunto: 'Sessão 2 — 50 questões Port acumuladas', tipo: 'questoes', quantidade: 50 },
+      { id: 's3_seg_5', disciplina: 'Regimento Interno ALE-RR', assunto: 'Pré-uni 35min — lei seca', tipo: 'lei_seca' },
     ],
   },
   {

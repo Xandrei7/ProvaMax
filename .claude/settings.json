@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(node -e ' *)",
+      "Bash(grep -v \"^.*//.*filter\")",
+      "Bash(grep -n \"filter\\\\|slice\\\\|\\\\\\\\.map\\\\|resolvedTasks\" \"c:\\\\Users\\\\gustavo\\\\Desktop\\\\ProvaMax\\\\src\\\\pages\\\\StudyNow.tsx\")"
+    ]
+  }
+}

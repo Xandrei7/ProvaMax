@@ -8,7 +8,7 @@ import {
   getDisciplines, saveDiscipline, deleteDiscipline,
   getSubjects, saveSubject, deleteSubject,
   getSubjectParts, saveSubjectPart, deleteSubjectPart,
-  getQuestions, saveQuestion, deleteQuestion,
+  getQuestions, saveQuestion, deleteQuestion, batchMoveQuestions,
   getProfiles, updateUserStatus, getReports, ADMIN_EMAIL, normalizeEmail, getUserActivityCounts,
 } from '@/lib/dataService'
 import { toast } from 'sonner'
@@ -77,6 +77,11 @@ export function Admin() {
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [showInlineSub, setShowInlineSub] = useState(false)
   const [inlineSubName, setInlineSubName] = useState('')
+  const [showMoveQuestionsModal, setShowMoveQuestionsModal] = useState(false)
+  const [moveDisciplineId, setMoveDisciplineId] = useState('')
+  const [moveSubjectId, setMoveSubjectId] = useState('')
+  const [movePartId, setMovePartId] = useState('')
+  const [movingBatch, setMovingBatch] = useState(false)
 
   const [qForm, setQForm] = useState<{
     id?: string; discipline_id: string; subject_id: string; part_id: string;
@@ -279,6 +284,14 @@ export function Admin() {
     ? parts.filter(p => p.subject_id === qFilterSubject)
     : []
 
+  const subjectsForMove = moveDisciplineId
+    ? subjects.filter(s => s.discipline_id === moveDisciplineId)
+    : []
+
+  const partsForMove = moveSubjectId
+    ? parts.filter(p => p.subject_id === moveSubjectId)
+    : []
+
   const { duplicateFingerprints, duplicateQCount } = (() => {
     const fpCount = new Map<string, number>()
     for (const q of questions) {
@@ -384,6 +397,63 @@ export function Admin() {
       await loadAll()
     } catch {
       toast.error('Erro ao excluir questões selecionadas.')
+    }
+  }
+
+  function openMoveQuestionsModal() {
+    const firstSelected = questions.find(q => selectedQIds.has(q.id))
+    const fallbackDiscipline = firstSelected?.discipline_id || qFilterDisc || (qFilterSubject
+      ? subjects.find(s => s.id === qFilterSubject)?.discipline_id ?? ''
+      : '')
+
+    setMoveDisciplineId(fallbackDiscipline)
+    setMoveSubjectId(firstSelected?.subject_id ?? qFilterSubject)
+    setMovePartId(firstSelected?.part_id ?? qFilterPart)
+    setShowMoveQuestionsModal(true)
+  }
+
+  async function handleBatchMoveSelectedQuestions() {
+    const ids = [...selectedQIds]
+    if (ids.length === 0) return
+
+    if (!moveDisciplineId || !moveSubjectId) {
+      toast.error('Selecione matéria e assunto de destino.')
+      return
+    }
+
+    const validSubject = subjects.some(s => s.id === moveSubjectId && s.discipline_id === moveDisciplineId)
+    if (!validSubject) {
+      toast.error('Destino inválido. Escolha um assunto da matéria selecionada.')
+      return
+    }
+
+    const hasInvalidPart = !!movePartId && !parts.some(p => p.id === movePartId && p.subject_id === moveSubjectId)
+    if (hasInvalidPart) {
+      toast.error('Parte de destino inválida para o assunto escolhido.')
+      return
+    }
+
+    try {
+      setMovingBatch(true)
+      const movedCount = await batchMoveQuestions(ids, {
+        disciplineId: moveDisciplineId,
+        subjectId: moveSubjectId,
+        partId: movePartId || null,
+      })
+
+      if (movedCount === 0) {
+        toast.error('Nenhuma questão foi movida.')
+        return
+      }
+
+      toast.success(`${movedCount} questão(ões) movida(s) com sucesso.`)
+      setSelectedQIds(new Set())
+      setShowMoveQuestionsModal(false)
+      await loadAll()
+    } catch {
+      toast.error('Erro ao mover questões selecionadas.')
+    } finally {
+      setMovingBatch(false)
     }
   }
 
@@ -1153,6 +1223,12 @@ export function Admin() {
                 {selectedQIds.size > 0 && (
                   <>
                     <button
+                      onClick={openMoveQuestionsModal}
+                      className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
+                    >
+                      Mover para
+                    </button>
+                    <button
                       onClick={copySelectedToClipboard}
                       className="flex items-center gap-1 rounded-md border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
                     >
@@ -1257,6 +1333,93 @@ export function Admin() {
                   </div>
                 )
               })}
+            </div>
+          </div>
+        )}
+
+        {showMoveQuestionsModal && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-0 sm:items-center sm:px-3">
+            <div className="w-full max-w-md rounded-t-2xl border border-border bg-card shadow-2xl sm:rounded-2xl">
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Mover questões</p>
+                  <p className="text-xs text-muted-foreground">
+                    {selectedQIds.size} selecionada{selectedQIds.size !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => { if (!movingBatch) setShowMoveQuestionsModal(false) }}
+                  disabled={movingBatch}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:opacity-40"
+                  aria-label="Fechar modal"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-3 px-4 py-4">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-muted-foreground">Matéria de destino *</label>
+                  <select
+                    value={moveDisciplineId}
+                    onChange={e => {
+                      setMoveDisciplineId(e.target.value)
+                      setMoveSubjectId('')
+                      setMovePartId('')
+                    }}
+                    className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Selecione</option>
+                    {disciplines.map(d => <option key={d.id} value={d.id}>{d.icon} {d.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-muted-foreground">Assunto de destino *</label>
+                  <select
+                    value={moveSubjectId}
+                    onChange={e => {
+                      setMoveSubjectId(e.target.value)
+                      setMovePartId('')
+                    }}
+                    disabled={!moveDisciplineId}
+                    className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">Selecione</option>
+                    {subjectsForMove.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-muted-foreground">Parte de destino (opcional)</label>
+                  <select
+                    value={movePartId}
+                    onChange={e => setMovePartId(e.target.value)}
+                    disabled={!moveSubjectId || partsForMove.length === 0}
+                    className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">Sem parte (assunto geral)</option>
+                    {partsForMove.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+                <button
+                  onClick={() => { if (!movingBatch) setShowMoveQuestionsModal(false) }}
+                  disabled={movingBatch}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted/50 disabled:opacity-40"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => void handleBatchMoveSelectedQuestions()}
+                  disabled={!moveDisciplineId || !moveSubjectId || movingBatch}
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {movingBatch ? 'Movendo...' : 'Confirmar mover'}
+                </button>
+              </div>
             </div>
           </div>
         )}

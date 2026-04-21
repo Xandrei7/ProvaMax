@@ -89,6 +89,8 @@ export function StudyNow() {
 
   // Lê semana/dia do state de navegação (ex.: vindo do card da Home)
   const initState = location.state as { semana?: number; dia?: StudyDayKey } | null
+  const currentPlanWeek = getCurrentWeek()
+  const currentPlanDay = getCurrentDayKey()
 
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
@@ -96,11 +98,11 @@ export function StudyNow() {
   const [loading, setLoading] = useState(true)
 
   // Seleção de semana/dia — sempre visível, sem manualMode
-  // Prioridade: state de navegação > semana salva pelo usuário > semana calculada pelo calendário
+  // Prioridade: semana salva pelo usuário > state de navegação > Semana 1
   const [selectedWeek, setSelectedWeek] = useState(() =>
-    initState?.semana ?? loadSavedPlanWeek() ?? getCurrentWeek()
+    loadSavedPlanWeek() ?? initState?.semana ?? 1
   )
-  const [selectedDay, setSelectedDay] = useState<StudyDayKey>(() => initState?.dia ?? getCurrentDayKey())
+  const [selectedDay, setSelectedDay] = useState<StudyDayKey>(() => initState?.dia ?? currentPlanDay)
 
   const weekScrollRef = useRef<HTMLDivElement>(null)
 
@@ -176,6 +178,11 @@ export function StudyNow() {
   // ---------------------------------------------------------------------------
   // Ações
   // ---------------------------------------------------------------------------
+
+  function handleWeekSelection(week: number) {
+    setSelectedWeek(week)
+    savePlanWeek(week)
+  }
 
   function handleStartSession() {
     const newSession = createSession(selectedWeek, selectedDay, sessionMode)
@@ -1003,12 +1010,12 @@ export function StudyNow() {
                 )}
               </p>
             </div>
-            {(selectedWeek !== getCurrentWeek() || selectedDay !== getCurrentDayKey()) && (
+            {(selectedWeek !== currentPlanWeek || selectedDay !== currentPlanDay) && (
               <button
-                onClick={() => { setSelectedWeek(getCurrentWeek()); setSelectedDay(getCurrentDayKey()) }}
+                onClick={() => { handleWeekSelection(currentPlanWeek); setSelectedDay(currentPlanDay) }}
                 className="text-xs text-primary hover:underline"
               >
-                ← Hoje
+                Usar semana atual
               </button>
             )}
           </div>
@@ -1023,12 +1030,10 @@ export function StudyNow() {
               <button
                 key={w}
                 data-selected={selectedWeek === w ? 'true' : undefined}
-                onClick={() => setSelectedWeek(w)}
+                onClick={() => handleWeekSelection(w)}
                 className={`shrink-0 rounded-lg py-1.5 text-xs font-semibold transition-all ${
                   selectedWeek === w
                     ? 'bg-primary text-primary-foreground'
-                    : w === getCurrentWeek()
-                    ? 'bg-primary/10 text-primary border border-primary/30'
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 }`}
                 style={{ minWidth: 34 }}
@@ -1047,8 +1052,6 @@ export function StudyNow() {
                 className={`rounded-lg py-1.5 text-xs font-semibold transition-all ${
                   selectedDay === key
                     ? 'bg-primary text-primary-foreground'
-                    : key === getCurrentDayKey()
-                    ? 'bg-primary/10 text-primary border border-primary/30'
                     : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 }`}
               >
@@ -1151,7 +1154,7 @@ export function StudyNow() {
             <div className="flex gap-2 mt-2">
               <button
                 onClick={() => {
-                  setSelectedWeek(session!.semana)
+                  handleWeekSelection(session!.semana)
                   setSelectedDay(session!.dia)
                 }}
                 className="text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors"
