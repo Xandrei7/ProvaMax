@@ -1,4 +1,4 @@
-import type { Discipline, Subject, SubjectPart } from '@/types'
+import type { Discipline, Flashcard, Subject, SubjectPart } from '@/types'
 import { studyPlan, getDayPlan } from '@/data/studyPlan'
 import type { StudyTask, StudyDayKey, StudyDayPlan } from '@/data/studyPlan'
 
@@ -261,6 +261,168 @@ export function savePlanWeek(week: number): void {
   try {
     localStorage.setItem(PLAN_WEEK_KEY, String(week))
   } catch { /* noop */ }
+}
+
+// ---------------------------------------------------------------------------
+// Escopo de revisão baseado no plano — janelas D+1 / D+7 / D+15 / D+30
+// ---------------------------------------------------------------------------
+
+export type ReviewWindow = 'all' | 'd1' | 'd7' | 'd15' | 'd30'
+
+export const REVIEW_WINDOW_LABELS: Record<ReviewWindow, string> = {
+  all: 'Tudo',
+  d1:  'D+1',
+  d7:  'D+7',
+  d15: 'D+15',
+  d30: 'D+30',
+}
+
+/**
+ * Mapeia janela de revisão → semanas do plano relevantes.
+ *
+ * D+1  = conteúdo recente (semana atual)
+ * D+7  = semana anterior  (currentWeek − 1)
+ * D+15 = duas semanas atrás
+ * D+30 = três semanas atrás
+ * all  = sem restrição (todas as semanas até a atual)
+ */
+function weeksForWindow(currentWeek: number, window: ReviewWindow): number[] {
+  switch (window) {
+    case 'd1':  return [currentWeek]
+    case 'd7':  return [Math.max(1, currentWeek - 1)]
+    case 'd15': return [Math.max(1, currentWeek - 2)]
+    case 'd30': return [Math.max(1, currentWeek - 3)]
+    case 'all': return Array.from({ length: currentWeek }, (_, i) => i + 1)
+  }
+}
+
+/**
+ * Retorna os discipline IDs (do banco) elegíveis para a janela de revisão.
+ *
+ * Lógica: varre as semanas relevantes do studyPlan, extrai nomes de disciplina
+ * (ignora 'Geral') e mapeia para IDs reais via matchDiscipline().
+ *
+ * Retorna Set vazio quando window === 'all' ou quando nenhuma disciplina mapeou
+ * (banco offline / vazio). O caller deve tratar Set vazio como "sem restrição".
+ */
+export function getPlanScopeDisciplineIds(
+  currentWeek: number,
+  window: ReviewWindow,
+  disciplines: Discipline[],
+): Set<string> {
+  if (window === 'all') return new Set()
+
+  const weeks = weeksForWindow(currentWeek, window)
+  const planNames = new Set<string>()
+
+  for (const dayPlan of studyPlan) {
+    if (!weeks.includes(dayPlan.semana)) continue
+    for (const task of dayPlan.tarefas) {
+      if (task.disciplina !== 'Geral') planNames.add(task.disciplina)
+    }
+  }
+
+  const ids = new Set<string>()
+  for (const name of planNames) {
+    const disc = matchDiscipline(name, disciplines)
+    if (disc) ids.add(disc.id)
+  }
+
+  return ids
+}
+
+// ---------------------------------------------------------------------------
+// Escopo hierárquico: disciplina → assunto (subject_id) → fallback controlado
+// ---------------------------------------------------------------------------
+
+/** Resultado estruturado do escopo do plano para a janela ativa. */
+export interface PlanScopeItems {
+  /** IDs de subject do banco que correspondem aos assuntos do plano nessa janela. */
+  subjectIds: Set<string>
+  /** IDs de discipline do banco das semanas relevantes (nível de fallback). */
+  disciplineIds: Set<string>
+  /** Rótulo curto para exibição na UI, ex.: "Sem.3: Port › Sintaxe; DirAdm › Licitação" */
+  scopeLabel: string
+}
+
+/**
+ * Retorna o escopo hierárquico do plano (subject → discipline) para a janela.
+ * Usa matchDiscipline() e matchSubject() para mapear nomes do plano para IDs reais.
+ *
+ * Retorna sets vazios quando window === 'all' (sem restrição).
+ */
+export function getPlanScopeItems(
+  currentWeek: number,
+  window: ReviewWindow,
+  disciplines: Discipline[],
+  subjects: Subject[],
+): PlanScopeItems {
+  if (window === 'all') return { subjectIds: new Set(), disciplineIds: new Set(), scopeLabel: '' }
+
+  const weeks = weeksForWindow(currentWeek, window)
+  const disciplineIds = new Set<string>()
+  const subjectIds    = new Set<string>()
+  const labelParts: string[] = []
+
+  for (const dayPlan of studyPlan) {
+    if (!weeks.includes(dayPlan.semana)) continue
+    for (const task of dayPlan.tarefas) {
+      if (task.disciplina === 'Geral') continue
+
+      const disc = matchDiscipline(task.disciplina, disciplines)
+      if (!disc) continue
+      disciplineIds.add(disc.id)
+
+      const subj = matchSubject(task.assunto, subjects, disc.id)
+      if (subj) {
+        subjectIds.add(subj.id)
+        // Nome curto para o rótulo (≤12 chars da disciplina + ≤18 do assunto)
+        const dLabel = disc.name.length > 12 ? disc.name.slice(0, 11) + '.' : disc.name
+        const sLabel = subj.name.length > 18 ? subj.name.slice(0, 17) + '.' : subj.name
+        labelParts.push(`${dLabel} › ${sLabel}`)
+      }
+    }
+  }
+
+  const weekLabel = weeks.length === 1
+    ? `Sem.${weeks[0]}`
+    : `Sem.${weeks[0]}–${weeks[weeks.length - 1]}`
+
+  const unique = [...new Set(labelParts)].slice(0, 3)
+  const scopeLabel = unique.length > 0
+    ? `${weekLabel}: ${unique.join('; ')}`
+    : weekLabel
+
+  return { subjectIds, disciplineIds, scopeLabel }
+}
+
+/**
+ * Filtra flashcards pelo escopo hierárquico do plano.
+ *
+ * Hierarquia:
+ *   1. subject_id no plano → mais preciso
+ *   2. discipline_id no plano → fallback dentro do plano
+ *   3. base original → só se os dois sets estão vazios (window === 'all')
+ *
+ * Nunca expande para a base global quando o escopo tem resultados em algum nível.
+ */
+export function applyPlanScope(cards: Flashcard[], scope: PlanScopeItems): Flashcard[] {
+  if (scope.subjectIds.size === 0 && scope.disciplineIds.size === 0) return cards
+
+  // Nível 1: assunto exato
+  if (scope.subjectIds.size > 0) {
+    const bySubject = cards.filter(c => c.subject_id != null && scope.subjectIds.has(c.subject_id))
+    if (bySubject.length > 0) return bySubject
+  }
+
+  // Nível 2: disciplina (ainda dentro do escopo do plano)
+  if (scope.disciplineIds.size > 0) {
+    const byDisc = cards.filter(c => scope.disciplineIds.has(c.discipline_id))
+    if (byDisc.length > 0) return byDisc
+  }
+
+  // Nenhum card ainda nessas semanas — retorna vazio para não poluir com conteúdo fora do plano
+  return []
 }
 
 // ---------------------------------------------------------------------------

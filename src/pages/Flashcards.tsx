@@ -22,6 +22,15 @@ import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { getDisciplines, getFlashcards, getSubjects, reviewFlashcard } from '@/lib/dataService'
 import { buildStudyNowQueue, formatStudyNowLine } from '@/lib/flashcardStudyNow'
+import {
+  applyPlanScope,
+  getCurrentWeek,
+  getPlanScopeItems,
+  loadSavedPlanWeek,
+  REVIEW_WINDOW_LABELS,
+  type PlanScopeItems,
+  type ReviewWindow,
+} from '@/lib/studyNowUtils'
 import { useAuth } from '@/contexts/AuthContext'
 import type { Discipline, Flashcard, Subject } from '@/types'
 
@@ -163,6 +172,9 @@ export function Flashcards() {
   const initDisciplineId = searchParams.get('disciplineId') ?? ''
   const [reviewDiscipline, setReviewDiscipline] = useState(initDisciplineId || 'all')
   const [sessionSize, setSessionSize] = useState<SessionSize>(20)
+  // Semana do plano (carregada do localStorage para ficar em sincronia com StudyNow)
+  const [planWeek] = useState<number>(() => loadSavedPlanWeek() ?? getCurrentWeek())
+  const [reviewWindow, setReviewWindow] = useState<ReviewWindow>('all')
 
   const [dueCards, setDueCards] = useState<Flashcard[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -218,13 +230,25 @@ export function Flashcards() {
     [subjects],
   )
 
-  // ── Base filtrada pelo seletor de disciplina do Modo Elite ─────────────────
-  const eliteCards = useMemo(
-    () => reviewDiscipline === 'all'
-      ? flashcards
-      : flashcards.filter(c => c.discipline_id === reviewDiscipline),
-    [flashcards, reviewDiscipline],
+  // ── Escopo hierárquico do plano (subject → discipline) ────────────────────
+  const planScope = useMemo<PlanScopeItems>(
+    () => getPlanScopeItems(planWeek, reviewWindow, disciplines, subjects),
+    [planWeek, reviewWindow, disciplines, subjects],
   )
+
+  // ── Base filtrada: disciplina do Modo Elite + escopo hierárquico do plano ──
+  const eliteCards = useMemo(() => {
+    const base = reviewDiscipline === 'all'
+      ? flashcards
+      : flashcards.filter(c => c.discipline_id === reviewDiscipline)
+
+    if (reviewWindow === 'all') return base
+
+    // Aplica escopo subject→discipline; se ambos retornarem vazio, usa base
+    // (significa que o usuário ainda não tem cards das semanas do escopo)
+    const scoped = applyPlanScope(base, planScope)
+    return scoped.length > 0 ? scoped : base
+  }, [flashcards, reviewDiscipline, reviewWindow, planScope])
 
   // ── Contadores (todos dependem de eliteCards para refletir a disciplina) ────
   const now = new Date()
@@ -702,6 +726,40 @@ export function Flashcards() {
             <p className="text-xs text-muted-foreground mb-4">
               Repetição espaçada + priorização por erro + adaptação automática
             </p>
+
+            {/* Janela de revisão do plano */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs text-muted-foreground">
+                  Semana <strong>{planWeek}</strong> do plano — janela de revisão:
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                {(Object.entries(REVIEW_WINDOW_LABELS) as [ReviewWindow, string][]).map(([w, label]) => (
+                  <button
+                    key={w}
+                    onClick={() => setReviewWindow(w)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      reviewWindow === w
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* Rótulo do escopo ativo */}
+              {reviewWindow !== 'all' && planScope.scopeLabel && (
+                <p className="mt-1.5 text-[11px] text-muted-foreground leading-snug">
+                  <span className="font-medium text-primary/70">{REVIEW_WINDOW_LABELS[reviewWindow]}</span>
+                  {' — '}{planScope.scopeLabel}
+                </p>
+              )}
+              {reviewWindow !== 'all' && !planScope.scopeLabel && (
+                <p className="mt-1.5 text-[11px] text-amber-600">sem assuntos mapeados nessa janela</p>
+              )}
+            </div>
 
             {/* Filtro de disciplina para revisão */}
             <select
