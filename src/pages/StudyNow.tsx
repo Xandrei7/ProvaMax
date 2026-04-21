@@ -24,7 +24,8 @@ import type {
 import { DAY_LABELS, TASK_TYPE_LABELS, TASK_TYPE_COLORS } from '@/data/studyPlan'
 import type { StudyTaskType } from '@/data/studyPlan'
 import { useAuth } from '@/contexts/AuthContext'
-import { createTheory } from '@/lib/theoryService'
+import { createTheory, updateTheory, getTheoriesBySubject } from '@/lib/theoryService'
+import { sanitizeTheoryHtml } from '@/lib/richText'
 import { toast } from 'sonner'
 
 type TheoryQuickSetup = {
@@ -134,7 +135,9 @@ export function StudyNow() {
     subjectId: string
     partId: string
     quantidade: string
-  }>({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+    leiSecaLink: string
+    leiSecaContent: string
+  }>({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '', leiSecaLink: '', leiSecaContent: '' })
   const [editingTaskIndex, setEditingTaskIndex] = useState<number | null>(null)
   const [editTaskForm, setEditTaskForm] = useState<{
     tipo: StudyTaskType
@@ -142,7 +145,11 @@ export function StudyNow() {
     subjectId: string
     partId: string
     quantidade: string
-  }>({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+    leiSecaLink: string
+    leiSecaContent: string
+  }>({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '', leiSecaLink: '', leiSecaContent: '' })
+  const addLeiSecaRef = useRef<HTMLTextAreaElement>(null)
+  const editLeiSecaRef = useRef<HTMLTextAreaElement>(null)
 
   const defaultBateriaConfig: BateriaConfig = { mode: 'escopo', selecoes: [], quantidade: 10 }
   const [bateriaConfig, setBateriaConfig] = useState<BateriaConfig>(defaultBateriaConfig)
@@ -322,6 +329,10 @@ export function StudyNow() {
   }
 
   function handleNavigateToTask(task: ResolvedTask) {
+    if (task.tipo === 'lei_seca' && task.leiSecaLink) {
+      window.open(task.leiSecaLink, '_blank', 'noopener,noreferrer')
+      return
+    }
     if (task.tipo === 'bateria' && task.bateriaConfig) {
       const { selecoes, quantidade, tempo } = task.bateriaConfig
       const disciplineIds = [...new Set(selecoes.map(s => s.disciplineId).filter(Boolean))]
@@ -565,7 +576,7 @@ export function StudyNow() {
         setSession(updated)
       }
       updateOverrides(newOverrides)
-      setAddTaskForm({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+      setAddTaskForm({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '', leiSecaLink: '', leiSecaContent: '' })
       setBateriaConfig(defaultBateriaConfig)
       setShowAddTaskModal(false)
       toast.success('Bateria adicionada ao dia.')
@@ -578,7 +589,12 @@ export function StudyNow() {
       return
     }
     const id = `admin-extra-${Date.now()}`
-    const data: AdminTaskData = { id, tipo, disciplinaId, subjectId, partId: addTaskForm.partId, quantidade: addTaskForm.quantidade }
+    const data: AdminTaskData = {
+      id, tipo, disciplinaId, subjectId,
+      partId: addTaskForm.partId, quantidade: addTaskForm.quantidade,
+      leiSecaLink: tipo === 'lei_seca' ? addTaskForm.leiSecaLink : undefined,
+      leiSecaContent: tipo === 'lei_seca' ? addTaskForm.leiSecaContent : undefined,
+    }
     const newTask = buildResolvedTaskFromAdmin(data, disciplines, subjects, parts)
     const newOverrides: DayTaskOverrides = { ...dayOverrides, extras: [...dayOverrides.extras, data] }
     if (session && !session.finished) {
@@ -587,10 +603,21 @@ export function StudyNow() {
       setSession(updated)
     }
     updateOverrides(newOverrides)
-    setAddTaskForm({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+    setAddTaskForm({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '', leiSecaLink: '', leiSecaContent: '' })
     setBateriaConfig(defaultBateriaConfig)
     setShowAddTaskModal(false)
     toast.success('Tarefa adicionada ao dia.')
+    if (tipo === 'lei_seca' && subjectId && (addTaskForm.leiSecaLink || addTaskForm.leiSecaContent)) {
+      const subjName = subjects.find(s => s.id === subjectId)?.name ?? ''
+      createTheory({
+        discipline_id: disciplinaId,
+        subject_id: subjectId,
+        title: `Lei seca — ${subjName}`,
+        content_html: addTaskForm.leiSecaContent || '',
+        youtube_url: addTaskForm.leiSecaLink || null,
+        complementary_text: null,
+      }).catch(() => toast.error('Teoria salva localmente, mas nao foi possivel sincronizar com o servidor.'))
+    }
   }
 
   function openEditTask(index: number) {
@@ -603,6 +630,8 @@ export function StudyNow() {
       subjectId: task.mappedSubjectId ?? '',
       partId: task.mappedPartId ?? '',
       quantidade: task.quantidade?.toString() ?? '',
+      leiSecaLink: task.leiSecaLink ?? '',
+      leiSecaContent: task.leiSecaContent ?? '',
     })
     if (task.tipo === 'bateria' && task.bateriaConfig) {
       setBateriaConfig({ ...task.bateriaConfig })
@@ -647,6 +676,8 @@ export function StudyNow() {
     const data: AdminTaskData = {
       id: original.id, tipo, disciplinaId, subjectId,
       partId: editTaskForm.partId, quantidade: editTaskForm.quantidade,
+      leiSecaLink: tipo === 'lei_seca' ? editTaskForm.leiSecaLink : undefined,
+      leiSecaContent: tipo === 'lei_seca' ? editTaskForm.leiSecaContent : undefined,
     }
     const newOverrides: DayTaskOverrides = isExtraTask
       ? { ...dayOverrides, extras: dayOverrides.extras.map(e => e.id === original.id ? data : e) }
@@ -654,6 +685,25 @@ export function StudyNow() {
     updateOverrides(newOverrides)
     setEditingTaskIndex(null)
     toast.success('Tarefa atualizada.')
+    if (tipo === 'lei_seca' && subjectId && (editTaskForm.leiSecaLink || editTaskForm.leiSecaContent)) {
+      const subjName = subjects.find(s => s.id === subjectId)?.name ?? ''
+      getTheoriesBySubject(subjectId).then(list => {
+        if (list.length > 0) {
+          return updateTheory(list[0].id, {
+            content_html: editTaskForm.leiSecaContent || list[0].content_html,
+            youtube_url: editTaskForm.leiSecaLink || null,
+          })
+        }
+        return createTheory({
+          discipline_id: disciplinaId,
+          subject_id: subjectId,
+          title: `Lei seca — ${subjName}`,
+          content_html: editTaskForm.leiSecaContent || '',
+          youtube_url: editTaskForm.leiSecaLink || null,
+          complementary_text: null,
+        })
+      }).catch(() => { /* nao-critico: dados salvos no localStorage */ })
+    }
   }
 
   function handleDeleteTask(index: number) {
@@ -1558,7 +1608,7 @@ export function StudyNow() {
               <div className="mt-4 flex flex-col gap-2.5">
                 <select
                   value={addTaskForm.tipo}
-                  onChange={e => { setAddTaskForm({ tipo: e.target.value as StudyTaskType, disciplinaId: '', subjectId: '', partId: '', quantidade: '' }); setBateriaConfig(defaultBateriaConfig) }}
+                  onChange={e => { setAddTaskForm({ tipo: e.target.value as StudyTaskType, disciplinaId: '', subjectId: '', partId: '', quantidade: '', leiSecaLink: '', leiSecaContent: '' }); setBateriaConfig(defaultBateriaConfig) }}
                   className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="questoes">Questoes</option>
@@ -1688,6 +1738,16 @@ export function StudyNow() {
                         {addSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                     )}
+                    {/* Lei Seca: campo de link (entre assunto e parte) */}
+                    {addTaskForm.tipo === 'lei_seca' && addTaskForm.subjectId && (
+                      <input
+                        type="url"
+                        value={addTaskForm.leiSecaLink}
+                        onChange={e => setAddTaskForm(prev => ({ ...prev, leiSecaLink: e.target.value }))}
+                        placeholder="Link (PDF, CDN, pagina web — opcional)"
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      />
+                    )}
                     {showPart && (
                       <select
                         value={addTaskForm.partId}
@@ -1704,6 +1764,48 @@ export function StudyNow() {
                         placeholder="Quantidade (opcional)"
                         className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                       />
+                    )}
+                    {/* Lei Seca: conteúdo HTML (abaixo de tudo) */}
+                    {addTaskForm.tipo === 'lei_seca' && addTaskForm.subjectId && (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted-foreground">Conteudo da lei seca</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = addLeiSecaRef.current
+                              if (!el) return
+                              const { selectionStart: s, selectionEnd: e } = el
+                              if (s === e) { toast.error('Selecione um trecho primeiro'); return }
+                              const v = addTaskForm.leiSecaContent
+                              setAddTaskForm(prev => ({ ...prev, leiSecaContent: v.substring(0, s) + `<mark>${v.substring(s, e)}</mark>` + v.substring(e) }))
+                            }}
+                            className="rounded-md border border-border bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800 hover:bg-yellow-100"
+                          >
+                            Marcar texto
+                          </button>
+                        </div>
+                        <textarea
+                          ref={addLeiSecaRef}
+                          rows={8}
+                          value={addTaskForm.leiSecaContent}
+                          onChange={e => setAddTaskForm(prev => ({ ...prev, leiSecaContent: e.target.value }))}
+                          onPaste={e => {
+                            const html = e.clipboardData.getData('text/html')
+                            if (!html) return
+                            e.preventDefault()
+                            const cleaned = sanitizeTheoryHtml(html)
+                            const el = e.currentTarget
+                            const { selectionStart: s, selectionEnd: en } = el
+                            setAddTaskForm(prev => ({
+                              ...prev,
+                              leiSecaContent: prev.leiSecaContent.substring(0, s) + cleaned + prev.leiSecaContent.substring(en),
+                            }))
+                          }}
+                          placeholder="Cole ou escreva o conteudo da lei seca. Suporta <b>, <u>, <mark>, <p>, <ul>, <li>."
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </div>
                     )}
                   </>
                 )}
@@ -1746,7 +1848,7 @@ export function StudyNow() {
               <div className="mt-4 flex flex-col gap-2.5">
                 <select
                   value={editTaskForm.tipo}
-                  onChange={e => { setEditTaskForm(prev => ({ ...prev, tipo: e.target.value as StudyTaskType, disciplinaId: '', subjectId: '', partId: '', quantidade: '' })); setBateriaConfig(defaultBateriaConfig) }}
+                  onChange={e => { setEditTaskForm(prev => ({ ...prev, tipo: e.target.value as StudyTaskType, disciplinaId: '', subjectId: '', partId: '', quantidade: '', leiSecaLink: '', leiSecaContent: '' })); setBateriaConfig(defaultBateriaConfig) }}
                   className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="questoes">Questoes</option>
@@ -1876,6 +1978,16 @@ export function StudyNow() {
                         {editSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                     )}
+                    {/* Lei Seca: campo de link (entre assunto e parte) */}
+                    {editTaskForm.tipo === 'lei_seca' && editTaskForm.subjectId && (
+                      <input
+                        type="url"
+                        value={editTaskForm.leiSecaLink}
+                        onChange={e => setEditTaskForm(prev => ({ ...prev, leiSecaLink: e.target.value }))}
+                        placeholder="Link (PDF, CDN, pagina web — opcional)"
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      />
+                    )}
                     {showPart && (
                       <select
                         value={editTaskForm.partId}
@@ -1895,6 +2007,48 @@ export function StudyNow() {
                         placeholder="Quantidade (opcional)"
                         className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                       />
+                    )}
+                    {/* Lei Seca: conteúdo HTML (abaixo de tudo) */}
+                    {editTaskForm.tipo === 'lei_seca' && editTaskForm.subjectId && (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted-foreground">Conteudo da lei seca</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = editLeiSecaRef.current
+                              if (!el) return
+                              const { selectionStart: s, selectionEnd: e } = el
+                              if (s === e) { toast.error('Selecione um trecho primeiro'); return }
+                              const v = editTaskForm.leiSecaContent
+                              setEditTaskForm(prev => ({ ...prev, leiSecaContent: v.substring(0, s) + `<mark>${v.substring(s, e)}</mark>` + v.substring(e) }))
+                            }}
+                            className="rounded-md border border-border bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800 hover:bg-yellow-100"
+                          >
+                            Marcar texto
+                          </button>
+                        </div>
+                        <textarea
+                          ref={editLeiSecaRef}
+                          rows={8}
+                          value={editTaskForm.leiSecaContent}
+                          onChange={e => setEditTaskForm(prev => ({ ...prev, leiSecaContent: e.target.value }))}
+                          onPaste={e => {
+                            const html = e.clipboardData.getData('text/html')
+                            if (!html) return
+                            e.preventDefault()
+                            const cleaned = sanitizeTheoryHtml(html)
+                            const el = e.currentTarget
+                            const { selectionStart: s, selectionEnd: en } = el
+                            setEditTaskForm(prev => ({
+                              ...prev,
+                              leiSecaContent: prev.leiSecaContent.substring(0, s) + cleaned + prev.leiSecaContent.substring(en),
+                            }))
+                          }}
+                          placeholder="Cole ou escreva o conteudo da lei seca. Suporta <b>, <u>, <mark>, <p>, <ul>, <li>."
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </div>
                     )}
                   </>
                 )}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { BookOpen, PlayCircle, ListVideo, PlusCircle, Settings } from 'lucide-react'
+import { BookOpen, PlayCircle, ListVideo, PlusCircle, Settings, ExternalLink } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
 import { useAuth } from '@/contexts/AuthContext'
@@ -159,7 +159,21 @@ export function TheoryView() {
 
                 {openId === theory.id && (
                   <div className="border-t border-border px-4 pb-4 pt-3 flex flex-col gap-3">
-                    {theory.youtube_url && <VideoCard url={theory.youtube_url} />}
+                    {theory.youtube_url && (
+                      parseYouTubeUrl(theory.youtube_url)
+                        ? <VideoCard url={theory.youtube_url} />
+                        : (
+                          <a
+                            href={theory.youtube_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm font-medium text-primary hover:bg-muted/60 transition-colors"
+                          >
+                            <ExternalLink size={14} className="shrink-0" />
+                            Abrir link externo
+                          </a>
+                        )
+                    )}
                     <div
                       className="theory-content text-sm leading-relaxed"
                       dangerouslySetInnerHTML={{ __html: sanitizeTheoryHtml(theory.content_html) }}

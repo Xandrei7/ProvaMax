@@ -141,6 +141,8 @@ export interface ResolvedTask extends StudyTask {
   requiresManualSetup: boolean
   setupHint: string | null
   bateriaConfig?: BateriaConfig
+  leiSecaLink?: string
+  leiSecaContent?: string
 }
 
 export function resolveTaskMapping(
@@ -714,6 +716,8 @@ export interface AdminTaskData {
   partId: string
   quantidade: string
   bateriaConfig?: BateriaConfig
+  leiSecaLink?: string
+  leiSecaContent?: string
 }
 
 export interface DayTaskOverrides {
@@ -792,6 +796,8 @@ export function buildResolvedTaskFromAdmin(
     mappedPathLabel: pathLabel,
     requiresManualSetup: false,
     setupHint: null,
+    leiSecaLink: data.leiSecaLink,
+    leiSecaContent: data.leiSecaContent,
   }
 }
 
