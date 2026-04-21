@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   BookOpen, CheckCircle2, Clock, ChevronRight, ChevronLeft, AlertTriangle,
   SkipForward, RotateCcw, Target, XCircle, Play, Zap, ExternalLink,
-  ListChecks, Settings, Pencil,
+  ListChecks, Settings, Pencil, Plus, ChevronUp, ChevronDown, Trash2,
 } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
 import { BottomNav } from '@/components/BottomNav'
@@ -15,9 +15,14 @@ import {
   createSession, markTaskCompleted, markTaskPendingSetup, skipTask,
   getSessionProgress, getWeekMeta, buildStudyPath, matchDiscipline,
   loadSavedPlanWeek, savePlanWeek,
+  loadDayOverrides, saveDayOverrides, applyDayOverrides, buildResolvedTaskFromAdmin,
 } from '@/lib/studyNowUtils'
-import type { ResolvedTask, StudyDayKey, StudyNowSession, StudyNowMode } from '@/lib/studyNowUtils'
+import type {
+  ResolvedTask, StudyDayKey, StudyNowSession, StudyNowMode,
+  DayTaskOverrides, AdminTaskData, BateriaConfig, BateriaMode,
+} from '@/lib/studyNowUtils'
 import { DAY_LABELS, TASK_TYPE_LABELS, TASK_TYPE_COLORS } from '@/data/studyPlan'
+import type { StudyTaskType } from '@/data/studyPlan'
 import { useAuth } from '@/contexts/AuthContext'
 import { createTheory } from '@/lib/theoryService'
 import { toast } from 'sonner'
@@ -122,6 +127,27 @@ export function StudyNow() {
   const [sessionMode, setSessionMode] = useState<StudyNowMode>('flexivel')
   const [view, setView] = useState<'overview' | 'task'>('overview')
   const [showPendingPanel, setShowPendingPanel] = useState(false)
+  const [showAddTaskModal, setShowAddTaskModal] = useState(false)
+  const [addTaskForm, setAddTaskForm] = useState<{
+    tipo: StudyTaskType
+    disciplinaId: string
+    subjectId: string
+    partId: string
+    quantidade: string
+  }>({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+  const [editingTaskIndex, setEditingTaskIndex] = useState<number | null>(null)
+  const [editTaskForm, setEditTaskForm] = useState<{
+    tipo: StudyTaskType
+    disciplinaId: string
+    subjectId: string
+    partId: string
+    quantidade: string
+  }>({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+
+  const defaultBateriaConfig: BateriaConfig = { mode: 'escopo', selecoes: [], quantidade: 10 }
+  const [bateriaConfig, setBateriaConfig] = useState<BateriaConfig>(defaultBateriaConfig)
+  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null)
+  const [dayOverrides, setDayOverrides] = useState<DayTaskOverrides>({ edited: {}, removed: [], extras: [], order: null })
 
   // Carrega dados do banco
   useEffect(() => {
@@ -135,13 +161,18 @@ export function StudyNow() {
     load()
   }, [])
 
-  // Resolve tarefas do dia selecionado
+  // Carrega overrides do admin ao trocar semana/dia
+  useEffect(() => {
+    setDayOverrides(loadDayOverrides(selectedWeek, selectedDay))
+  }, [selectedWeek, selectedDay])
+
+  // Resolve tarefas do dia selecionado + aplica overrides do admin
   useEffect(() => {
     if (loading) return
     const plan = getPlanForDay(selectedWeek, selectedDay)
-    if (!plan) { setResolvedTasks([]); return }
-    setResolvedTasks(resolveAllTasks(plan.tarefas, disciplines, subjects, parts))
-  }, [loading, selectedWeek, selectedDay, disciplines, subjects, parts])
+    const planTasks = plan ? resolveAllTasks(plan.tarefas, disciplines, subjects, parts) : []
+    setResolvedTasks(applyDayOverrides(planTasks, dayOverrides, disciplines, subjects, parts))
+  }, [loading, selectedWeek, selectedDay, disciplines, subjects, parts, dayOverrides])
 
   // Carrega sessão salva ao abrir — NÃO sobrescreve semana/dia escolhidos manualmente.
   // O banner "sessão em andamento" já oferece "Ir para aquele dia" se o usuário quiser.
@@ -186,6 +217,8 @@ export function StudyNow() {
 
   function handleStartSession() {
     const newSession = createSession(selectedWeek, selectedDay, sessionMode)
+    // Usa os IDs reais (inclui extras do admin, respeita ordem e remoções)
+    newSession.taskIds = resolvedTasks.map(t => t.id)
     saveSession(newSession)
     setSession(newSession)
     setView('task')
@@ -220,6 +253,11 @@ export function StudyNow() {
   function handleSkipTask() {
     if (!session || !currentTask) return
     updateSession(skipTask(session, currentTask.id))
+  }
+
+  function updateOverrides(newOverrides: DayTaskOverrides) {
+    saveDayOverrides(selectedWeek, selectedDay, newOverrides)
+    setDayOverrides(newOverrides)
   }
 
   // Calcula todos os subjects/disciplines cobertos pelo plano até (e incluindo) upToWeek/upToDay.
@@ -284,6 +322,26 @@ export function StudyNow() {
   }
 
   function handleNavigateToTask(task: ResolvedTask) {
+    if (task.tipo === 'bateria' && task.bateriaConfig) {
+      const { selecoes, quantidade, tempo } = task.bateriaConfig
+      const disciplineIds = [...new Set(selecoes.map(s => s.disciplineId).filter(Boolean))]
+      const subjectIds = selecoes.flatMap(s => s.subjectIds)
+      navigate('/simulado', {
+        state: {
+          fromStudyNow: true,
+          autoStartAdvanced: true,
+          sourceTaskId: task.id,
+          week: selectedWeek,
+          day: selectedDay,
+          disciplineIds,
+          subjectIds: subjectIds.length > 0 ? subjectIds : undefined,
+          questionCount: quantidade,
+          timeMinutes: tempo,
+        },
+      })
+      return
+    }
+
     if (isMixedMiniSimuladoTask(task)) {
       const daySubjectIds = Array.from(new Set(
         resolvedTasks
@@ -468,8 +526,8 @@ export function StudyNow() {
     }
     if (task.requiresManualSetup) {
       if (isTheoryLikeTask(task)) {
-        openTheorySetup(task)
-      } else {
+        if (isAdmin) openTheorySetup(task)
+      } else if (isAdmin) {
         navigate('/import', {
           state: { fromStudyNow: true, semana: selectedWeek, dia: selectedDay, disciplina: task.disciplina, assunto: task.assunto },
         })
@@ -477,6 +535,146 @@ export function StudyNow() {
       return
     }
     handleNavigateToTask(task)
+  }
+
+  function handleAddTask() {
+    const { disciplinaId, subjectId, tipo } = addTaskForm
+
+    if (tipo === 'bateria') {
+      if (!bateriaConfig.selecoes.length || !bateriaConfig.selecoes[0]?.disciplineId) {
+        toast.error('Selecione ao menos uma disciplina para a bateria.')
+        return
+      }
+      if (!bateriaConfig.quantidade) {
+        toast.error('Informe a quantidade de questões.')
+        return
+      }
+      const id = `admin-extra-${Date.now()}`
+      const data: AdminTaskData = {
+        id, tipo: 'bateria',
+        disciplinaId: bateriaConfig.selecoes[0].disciplineId,
+        subjectId: '', partId: '',
+        quantidade: String(bateriaConfig.quantidade),
+        bateriaConfig: { ...bateriaConfig },
+      }
+      const newTask = buildResolvedTaskFromAdmin(data, disciplines, subjects, parts)
+      const newOverrides: DayTaskOverrides = { ...dayOverrides, extras: [...dayOverrides.extras, data] }
+      if (session && !session.finished) {
+        const updated = { ...session, taskIds: [...session.taskIds, newTask.id] }
+        saveSession(updated)
+        setSession(updated)
+      }
+      updateOverrides(newOverrides)
+      setAddTaskForm({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+      setBateriaConfig(defaultBateriaConfig)
+      setShowAddTaskModal(false)
+      toast.success('Bateria adicionada ao dia.')
+      return
+    }
+
+    const needsSubject = tipo !== 'simulado' && tipo !== 'revisao'
+    if (!disciplinaId || (needsSubject && !subjectId)) {
+      toast.error(needsSubject ? 'Selecione disciplina e assunto.' : 'Selecione a disciplina.')
+      return
+    }
+    const id = `admin-extra-${Date.now()}`
+    const data: AdminTaskData = { id, tipo, disciplinaId, subjectId, partId: addTaskForm.partId, quantidade: addTaskForm.quantidade }
+    const newTask = buildResolvedTaskFromAdmin(data, disciplines, subjects, parts)
+    const newOverrides: DayTaskOverrides = { ...dayOverrides, extras: [...dayOverrides.extras, data] }
+    if (session && !session.finished) {
+      const updated = { ...session, taskIds: [...session.taskIds, newTask.id] }
+      saveSession(updated)
+      setSession(updated)
+    }
+    updateOverrides(newOverrides)
+    setAddTaskForm({ tipo: 'questoes', disciplinaId: '', subjectId: '', partId: '', quantidade: '' })
+    setBateriaConfig(defaultBateriaConfig)
+    setShowAddTaskModal(false)
+    toast.success('Tarefa adicionada ao dia.')
+  }
+
+  function openEditTask(index: number) {
+    const task = resolvedTasks[index]
+    if (!task) return
+    setEditingTaskIndex(index)
+    setEditTaskForm({
+      tipo: task.tipo,
+      disciplinaId: task.mappedDisciplineId ?? '',
+      subjectId: task.mappedSubjectId ?? '',
+      partId: task.mappedPartId ?? '',
+      quantidade: task.quantidade?.toString() ?? '',
+    })
+    if (task.tipo === 'bateria' && task.bateriaConfig) {
+      setBateriaConfig({ ...task.bateriaConfig })
+    } else {
+      setBateriaConfig(defaultBateriaConfig)
+    }
+  }
+
+  function handleSaveEditTask() {
+    if (editingTaskIndex === null) return
+    const original = resolvedTasks[editingTaskIndex]
+    const { disciplinaId, subjectId, tipo } = editTaskForm
+    const isExtraTask = dayOverrides.extras.some(e => e.id === original.id)
+
+    if (tipo === 'bateria') {
+      if (!bateriaConfig.selecoes.length || !bateriaConfig.selecoes[0]?.disciplineId) {
+        toast.error('Selecione ao menos uma disciplina para a bateria.')
+        return
+      }
+      const data: AdminTaskData = {
+        id: original.id, tipo: 'bateria',
+        disciplinaId: bateriaConfig.selecoes[0].disciplineId,
+        subjectId: '', partId: '',
+        quantidade: String(bateriaConfig.quantidade),
+        bateriaConfig: { ...bateriaConfig },
+      }
+      const newOverrides: DayTaskOverrides = isExtraTask
+        ? { ...dayOverrides, extras: dayOverrides.extras.map(e => e.id === original.id ? data : e) }
+        : { ...dayOverrides, edited: { ...dayOverrides.edited, [original.id]: data } }
+      updateOverrides(newOverrides)
+      setEditingTaskIndex(null)
+      setBateriaConfig(defaultBateriaConfig)
+      toast.success('Bateria atualizada.')
+      return
+    }
+
+    const needsSubject = tipo !== 'simulado' && tipo !== 'revisao'
+    if (!disciplinaId || (needsSubject && !subjectId)) {
+      toast.error(needsSubject ? 'Selecione disciplina e assunto.' : 'Selecione a disciplina.')
+      return
+    }
+    const data: AdminTaskData = {
+      id: original.id, tipo, disciplinaId, subjectId,
+      partId: editTaskForm.partId, quantidade: editTaskForm.quantidade,
+    }
+    const newOverrides: DayTaskOverrides = isExtraTask
+      ? { ...dayOverrides, extras: dayOverrides.extras.map(e => e.id === original.id ? data : e) }
+      : { ...dayOverrides, edited: { ...dayOverrides.edited, [original.id]: data } }
+    updateOverrides(newOverrides)
+    setEditingTaskIndex(null)
+    toast.success('Tarefa atualizada.')
+  }
+
+  function handleDeleteTask(index: number) {
+    const task = resolvedTasks[index]
+    if (!task) return
+    const isExtra = dayOverrides.extras.some(e => e.id === task.id)
+    const newOrder = dayOverrides.order?.filter(id => id !== task.id) ?? null
+    const newOverrides: DayTaskOverrides = isExtra
+      ? { ...dayOverrides, extras: dayOverrides.extras.filter(e => e.id !== task.id), order: newOrder }
+      : { ...dayOverrides, removed: [...dayOverrides.removed, task.id], order: newOrder }
+    updateOverrides(newOverrides)
+    setConfirmDeleteIndex(null)
+    toast.success('Tarefa removida.')
+  }
+
+  function handleMoveTask(index: number, direction: 'up' | 'down') {
+    const newIndex = direction === 'up' ? index - 1 : index + 1
+    if (newIndex < 0 || newIndex >= resolvedTasks.length) return
+    const newOrder = resolvedTasks.map(t => t.id)
+    ;[newOrder[index], newOrder[newIndex]] = [newOrder[newIndex], newOrder[index]]
+    updateOverrides({ ...dayOverrides, order: newOrder })
   }
 
   function taskStatus(task: ResolvedTask): 'completed' | 'pending_setup' | 'skipped' | 'current' | 'pending' {
@@ -704,7 +902,7 @@ export function StudyNow() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-3">
-                  {isTheoryLikeTask(currentTask) ? (
+                  {isTheoryLikeTask(currentTask) && isAdmin ? (
                     <button
                       onClick={() => openTheorySetup(currentTask)}
                       className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors"
@@ -755,7 +953,8 @@ export function StudyNow() {
                 <div className="flex items-center gap-2">
                   <Zap size={16} />
                   <span>
-                    {currentTask.tipo === 'simulado' ? 'Abrir Simulado' :
+                    {currentTask.tipo === 'bateria' ? 'Iniciar Bateria' :
+                     currentTask.tipo === 'simulado' ? 'Abrir Simulado' :
                      isMixedMiniTask ? 'Iniciar Mini Simulado do Dia' :
                      currentTask.tipo === 'revisao' ? 'Abrir Flashcards' :
                      currentTask.tipo === 'teoria' || currentTask.tipo === 'lei_seca' ? 'Abrir Teoria' :
@@ -767,7 +966,7 @@ export function StudyNow() {
               </button>
             )}
 
-            {!path && isTheoryFallbackTask && (
+            {!path && isTheoryFallbackTask && isAdmin && (
               <button
                 onClick={() => openTheorySetup(currentTask)}
                 className="flex items-center justify-between rounded-xl px-5 py-4 font-semibold transition-all bg-amber-500/85 text-white hover:bg-amber-500"
@@ -1216,6 +1415,15 @@ export function StudyNow() {
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                 Tarefas do dia
               </p>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowAddTaskModal(true)}
+                  className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors px-2 py-1 rounded-lg hover:bg-muted/50"
+                >
+                  <Plus size={12} />
+                  Incluir tarefa
+                </button>
+              )}
             </div>
             <div className="flex flex-col gap-2">
               {resolvedTasks.map((task, index) => {
@@ -1257,22 +1465,52 @@ export function StudyNow() {
                       )}
                     </div>
                     {isAdmin && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (isTheoryLikeTask(task)) {
-                            openTheorySetup(task)
-                          } else {
-                            navigate('/import', {
-                              state: { fromStudyNow: true, semana: selectedWeek, dia: selectedDay, disciplina: task.disciplina, assunto: task.assunto },
-                            })
-                          }
-                        }}
-                        className="shrink-0 p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                        title="Ajustar destino"
-                      >
-                        <Pencil size={12} />
-                      </button>
+                      <div className="shrink-0 flex flex-col gap-0.5" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => handleMoveTask(index, 'up')}
+                          disabled={index === 0}
+                          className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-20"
+                          title="Mover para cima"
+                        >
+                          <ChevronUp size={11} />
+                        </button>
+                        <button
+                          onClick={() => handleMoveTask(index, 'down')}
+                          disabled={index === resolvedTasks.length - 1}
+                          className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-20"
+                          title="Mover para baixo"
+                        >
+                          <ChevronDown size={11} />
+                        </button>
+                      </div>
+                    )}
+                    {isAdmin && (
+                      <div className="shrink-0 flex flex-col gap-0.5" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => openEditTask(index)}
+                          className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                          title="Editar tarefa"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        {confirmDeleteIndex === index ? (
+                          <button
+                            onClick={() => handleDeleteTask(index)}
+                            className="p-1.5 rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                            title="Confirmar exclusão"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteIndex(index)}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-red-600 hover:bg-red-50 transition-colors"
+                            title="Remover tarefa"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
                     )}
                     <ChevronRight size={14} className="text-muted-foreground shrink-0 mt-1" />
                   </button>
@@ -1290,10 +1528,395 @@ export function StudyNow() {
               Sem tarefas para Semana {selectedWeek} · {DAY_LABELS[selectedDay]}
             </p>
             <p className="text-xs text-muted-foreground/60 mt-1">Escolha outro dia manualmente.</p>
+            {isAdmin && (
+              <button
+                onClick={() => setShowAddTaskModal(true)}
+                className="mt-4 flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 border border-primary/30 px-3 py-2 rounded-lg transition-colors"
+              >
+                <Plus size={13} />
+                Incluir tarefa
+              </button>
+            )}
           </div>
         )}
 
       </main>
+
+      {/* Modal Incluir nova tarefa (admin) */}
+      {showAddTaskModal && isAdmin && (() => {
+        const addSubjects = subjects.filter(s => s.discipline_id === addTaskForm.disciplinaId)
+        const addParts = parts.filter(p => p.subject_id === addTaskForm.subjectId)
+        const isBateria = addTaskForm.tipo === 'bateria'
+        const showSubject = !isBateria && addTaskForm.tipo !== 'simulado'
+        const showPart = showSubject && addTaskForm.subjectId !== '' && addParts.length > 0
+        const showQtd = !isBateria && (addTaskForm.tipo === 'questoes' || addTaskForm.tipo === 'revisao')
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 px-3 py-4 sm:items-center">
+            <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+              <p className="text-sm font-semibold text-foreground">Incluir nova tarefa</p>
+              <p className="mt-1 text-xs text-muted-foreground">Semana {selectedWeek} · {DAY_LABELS[selectedDay]}</p>
+              <div className="mt-4 flex flex-col gap-2.5">
+                <select
+                  value={addTaskForm.tipo}
+                  onChange={e => { setAddTaskForm({ tipo: e.target.value as StudyTaskType, disciplinaId: '', subjectId: '', partId: '', quantidade: '' }); setBateriaConfig(defaultBateriaConfig) }}
+                  className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="questoes">Questoes</option>
+                  <option value="teoria">Teoria</option>
+                  <option value="lei_seca">Lei Seca</option>
+                  <option value="revisao">Revisao / Flashcards</option>
+                  <option value="simulado">Simulado</option>
+                  <option value="bateria">Bateria</option>
+                </select>
+
+                {/* Config de bateria */}
+                {isBateria && (
+                  <div className="border border-cyan-500/20 rounded-lg p-3 bg-cyan-50/30 flex flex-col gap-2">
+                    <p className="text-xs font-semibold text-cyan-700">Configurar Bateria</p>
+                    <div className="flex gap-2">
+                      {(['escopo', 'mista'] as BateriaMode[]).map(mode => (
+                        <button key={mode} type="button"
+                          onClick={() => setBateriaConfig(prev => ({ ...prev, mode, selecoes: [] }))}
+                          className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-all border ${bateriaConfig.mode === mode ? 'border-cyan-500 bg-cyan-500/15 text-cyan-700' : 'border-border bg-card text-muted-foreground hover:bg-muted/50'}`}
+                        >
+                          {mode === 'escopo' ? 'Mesmo Escopo' : 'Mista'}
+                        </button>
+                      ))}
+                    </div>
+                    {bateriaConfig.mode === 'escopo' && (
+                      <div className="flex flex-col gap-2">
+                        <select
+                          value={bateriaConfig.selecoes[0]?.disciplineId ?? ''}
+                          onChange={e => setBateriaConfig(prev => ({ ...prev, selecoes: [{ disciplineId: e.target.value, subjectIds: [] }] }))}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">Selecione a disciplina *</option>
+                          {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                        {bateriaConfig.selecoes[0]?.disciplineId && (
+                          <div className="border border-border rounded-lg p-2 max-h-32 overflow-y-auto flex flex-col gap-1">
+                            <p className="text-xs text-muted-foreground mb-0.5">Assuntos (vazio = todos):</p>
+                            {subjects.filter(s => s.discipline_id === bateriaConfig.selecoes[0].disciplineId).map(s => (
+                              <label key={s.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                                <input type="checkbox" className="accent-primary"
+                                  checked={bateriaConfig.selecoes[0].subjectIds.includes(s.id)}
+                                  onChange={e => {
+                                    const ids = e.target.checked ? [...bateriaConfig.selecoes[0].subjectIds, s.id] : bateriaConfig.selecoes[0].subjectIds.filter(id => id !== s.id)
+                                    setBateriaConfig(prev => ({ ...prev, selecoes: [{ ...prev.selecoes[0], subjectIds: ids }] }))
+                                  }}
+                                />
+                                {s.name}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {bateriaConfig.mode === 'mista' && (
+                      <div className="flex flex-col gap-2">
+                        {bateriaConfig.selecoes.map((sel, i) => (
+                          <div key={i} className="border border-border rounded-lg p-2 flex flex-col gap-1.5">
+                            <div className="flex gap-2 items-center">
+                              <select value={sel.disciplineId}
+                                onChange={e => { const s = [...bateriaConfig.selecoes]; s[i] = { disciplineId: e.target.value, subjectIds: [] }; setBateriaConfig(prev => ({ ...prev, selecoes: s })) }}
+                                className="flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-xs focus:outline-none"
+                              >
+                                <option value="">Disciplina *</option>
+                                {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                              </select>
+                              <button type="button" onClick={() => setBateriaConfig(prev => ({ ...prev, selecoes: prev.selecoes.filter((_, j) => j !== i) }))} className="text-xs text-red-500 hover:text-red-700 px-1">✕</button>
+                            </div>
+                            {sel.disciplineId && (
+                              <div className="border border-border rounded-lg p-1.5 max-h-24 overflow-y-auto flex flex-col gap-1">
+                                <p className="text-xs text-muted-foreground mb-0.5">Assuntos (opcional):</p>
+                                {subjects.filter(s => s.discipline_id === sel.disciplineId).map(s => (
+                                  <label key={s.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                                    <input type="checkbox" className="accent-primary"
+                                      checked={sel.subjectIds.includes(s.id)}
+                                      onChange={e => {
+                                        const ids = e.target.checked ? [...sel.subjectIds, s.id] : sel.subjectIds.filter(id => id !== s.id)
+                                        const selecoes = [...bateriaConfig.selecoes]; selecoes[i] = { ...sel, subjectIds: ids }
+                                        setBateriaConfig(prev => ({ ...prev, selecoes }))
+                                      }}
+                                    />
+                                    {s.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <button type="button"
+                          onClick={() => setBateriaConfig(prev => ({ ...prev, selecoes: [...prev.selecoes, { disciplineId: '', subjectIds: [] }] }))}
+                          className="flex items-center gap-1 text-xs text-cyan-700 hover:text-cyan-800 border border-cyan-300 rounded-lg px-2 py-1.5 transition-colors"
+                        >
+                          <Plus size={11} /> Adicionar disciplina
+                        </button>
+                      </div>
+                    )}
+                    <input type="number" min={1} value={bateriaConfig.quantidade || ''}
+                      onChange={e => setBateriaConfig(prev => ({ ...prev, quantidade: Number(e.target.value) }))}
+                      placeholder="Quantidade de questões *"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <input type="number" min={1} value={bateriaConfig.tempo ?? ''}
+                      onChange={e => setBateriaConfig(prev => ({ ...prev, tempo: e.target.value ? Number(e.target.value) : undefined }))}
+                      placeholder="Tempo em minutos (opcional)"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                )}
+
+                {/* Campos normais (não bateria) */}
+                {!isBateria && (
+                  <>
+                    <select
+                      value={addTaskForm.disciplinaId}
+                      onChange={e => setAddTaskForm(prev => ({ ...prev, disciplinaId: e.target.value, subjectId: '', partId: '' }))}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Selecione a disciplina *</option>
+                      {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    {showSubject && addTaskForm.disciplinaId && (
+                      <select
+                        value={addTaskForm.subjectId}
+                        onChange={e => setAddTaskForm(prev => ({ ...prev, subjectId: e.target.value, partId: '' }))}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="">{addTaskForm.tipo === 'revisao' ? 'Assunto (opcional)' : 'Selecione o assunto *'}</option>
+                        {addSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    )}
+                    {showPart && (
+                      <select
+                        value={addTaskForm.partId}
+                        onChange={e => setAddTaskForm(prev => ({ ...prev, partId: e.target.value }))}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="">Parte (opcional)</option>
+                        {addParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    )}
+                    {showQtd && (
+                      <input type="number" min={1} value={addTaskForm.quantidade}
+                        onChange={e => setAddTaskForm(prev => ({ ...prev, quantidade: e.target.value }))}
+                        placeholder="Quantidade (opcional)"
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => { setShowAddTaskModal(false); setBateriaConfig(defaultBateriaConfig) }}
+                  className="flex-1 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleAddTask}
+                  className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Modal Editar tarefa (admin) */}
+      {editingTaskIndex !== null && isAdmin && (() => {
+        const editSubjects = subjects.filter(s => s.discipline_id === editTaskForm.disciplinaId)
+        const editParts = parts.filter(p => p.subject_id === editTaskForm.subjectId)
+        const isBateria = editTaskForm.tipo === 'bateria'
+        const showSubject = !isBateria && editTaskForm.tipo !== 'simulado'
+        const showPart = showSubject && editTaskForm.subjectId !== '' && editParts.length > 0
+        const showQtd = !isBateria && (editTaskForm.tipo === 'questoes' || editTaskForm.tipo === 'revisao')
+        const taskLabel = resolvedTasks[editingTaskIndex]
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 px-3 py-4 sm:items-center">
+            <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+              <p className="text-sm font-semibold text-foreground">Editar tarefa</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {taskLabel?.disciplina} · {taskLabel?.assunto.split(' — ')[0]}
+              </p>
+              <div className="mt-4 flex flex-col gap-2.5">
+                <select
+                  value={editTaskForm.tipo}
+                  onChange={e => { setEditTaskForm(prev => ({ ...prev, tipo: e.target.value as StudyTaskType, disciplinaId: '', subjectId: '', partId: '', quantidade: '' })); setBateriaConfig(defaultBateriaConfig) }}
+                  className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="questoes">Questoes</option>
+                  <option value="teoria">Teoria</option>
+                  <option value="lei_seca">Lei Seca</option>
+                  <option value="revisao">Revisao / Flashcards</option>
+                  <option value="simulado">Simulado</option>
+                  <option value="bateria">Bateria</option>
+                </select>
+
+                {/* Config de bateria */}
+                {isBateria && (
+                  <div className="border border-cyan-500/20 rounded-lg p-3 bg-cyan-50/30 flex flex-col gap-2">
+                    <p className="text-xs font-semibold text-cyan-700">Configurar Bateria</p>
+                    <div className="flex gap-2">
+                      {(['escopo', 'mista'] as BateriaMode[]).map(mode => (
+                        <button key={mode} type="button"
+                          onClick={() => setBateriaConfig(prev => ({ ...prev, mode, selecoes: [] }))}
+                          className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-all border ${bateriaConfig.mode === mode ? 'border-cyan-500 bg-cyan-500/15 text-cyan-700' : 'border-border bg-card text-muted-foreground hover:bg-muted/50'}`}
+                        >
+                          {mode === 'escopo' ? 'Mesmo Escopo' : 'Mista'}
+                        </button>
+                      ))}
+                    </div>
+                    {bateriaConfig.mode === 'escopo' && (
+                      <div className="flex flex-col gap-2">
+                        <select
+                          value={bateriaConfig.selecoes[0]?.disciplineId ?? ''}
+                          onChange={e => setBateriaConfig(prev => ({ ...prev, selecoes: [{ disciplineId: e.target.value, subjectIds: [] }] }))}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">Selecione a disciplina *</option>
+                          {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                        {bateriaConfig.selecoes[0]?.disciplineId && (
+                          <div className="border border-border rounded-lg p-2 max-h-32 overflow-y-auto flex flex-col gap-1">
+                            <p className="text-xs text-muted-foreground mb-0.5">Assuntos (vazio = todos):</p>
+                            {subjects.filter(s => s.discipline_id === bateriaConfig.selecoes[0].disciplineId).map(s => (
+                              <label key={s.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                                <input type="checkbox" className="accent-primary"
+                                  checked={bateriaConfig.selecoes[0].subjectIds.includes(s.id)}
+                                  onChange={e => {
+                                    const ids = e.target.checked ? [...bateriaConfig.selecoes[0].subjectIds, s.id] : bateriaConfig.selecoes[0].subjectIds.filter(id => id !== s.id)
+                                    setBateriaConfig(prev => ({ ...prev, selecoes: [{ ...prev.selecoes[0], subjectIds: ids }] }))
+                                  }}
+                                />
+                                {s.name}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {bateriaConfig.mode === 'mista' && (
+                      <div className="flex flex-col gap-2">
+                        {bateriaConfig.selecoes.map((sel, i) => (
+                          <div key={i} className="border border-border rounded-lg p-2 flex flex-col gap-1.5">
+                            <div className="flex gap-2 items-center">
+                              <select value={sel.disciplineId}
+                                onChange={e => { const s = [...bateriaConfig.selecoes]; s[i] = { disciplineId: e.target.value, subjectIds: [] }; setBateriaConfig(prev => ({ ...prev, selecoes: s })) }}
+                                className="flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-xs focus:outline-none"
+                              >
+                                <option value="">Disciplina *</option>
+                                {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                              </select>
+                              <button type="button" onClick={() => setBateriaConfig(prev => ({ ...prev, selecoes: prev.selecoes.filter((_, j) => j !== i) }))} className="text-xs text-red-500 hover:text-red-700 px-1">✕</button>
+                            </div>
+                            {sel.disciplineId && (
+                              <div className="border border-border rounded-lg p-1.5 max-h-24 overflow-y-auto flex flex-col gap-1">
+                                <p className="text-xs text-muted-foreground mb-0.5">Assuntos (opcional):</p>
+                                {subjects.filter(s => s.discipline_id === sel.disciplineId).map(s => (
+                                  <label key={s.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                                    <input type="checkbox" className="accent-primary"
+                                      checked={sel.subjectIds.includes(s.id)}
+                                      onChange={e => {
+                                        const ids = e.target.checked ? [...sel.subjectIds, s.id] : sel.subjectIds.filter(id => id !== s.id)
+                                        const selecoes = [...bateriaConfig.selecoes]; selecoes[i] = { ...sel, subjectIds: ids }
+                                        setBateriaConfig(prev => ({ ...prev, selecoes }))
+                                      }}
+                                    />
+                                    {s.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <button type="button"
+                          onClick={() => setBateriaConfig(prev => ({ ...prev, selecoes: [...prev.selecoes, { disciplineId: '', subjectIds: [] }] }))}
+                          className="flex items-center gap-1 text-xs text-cyan-700 hover:text-cyan-800 border border-cyan-300 rounded-lg px-2 py-1.5 transition-colors"
+                        >
+                          <Plus size={11} /> Adicionar disciplina
+                        </button>
+                      </div>
+                    )}
+                    <input type="number" min={1} value={bateriaConfig.quantidade || ''}
+                      onChange={e => setBateriaConfig(prev => ({ ...prev, quantidade: Number(e.target.value) }))}
+                      placeholder="Quantidade de questões *"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <input type="number" min={1} value={bateriaConfig.tempo ?? ''}
+                      onChange={e => setBateriaConfig(prev => ({ ...prev, tempo: e.target.value ? Number(e.target.value) : undefined }))}
+                      placeholder="Tempo em minutos (opcional)"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                )}
+
+                {/* Campos normais (não bateria) */}
+                {!isBateria && (
+                  <>
+                    <select
+                      value={editTaskForm.disciplinaId}
+                      onChange={e => setEditTaskForm(prev => ({ ...prev, disciplinaId: e.target.value, subjectId: '', partId: '' }))}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Selecione a disciplina *</option>
+                      {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    {showSubject && editTaskForm.disciplinaId && (
+                      <select
+                        value={editTaskForm.subjectId}
+                        onChange={e => setEditTaskForm(prev => ({ ...prev, subjectId: e.target.value, partId: '' }))}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="">{editTaskForm.tipo === 'revisao' ? 'Assunto (opcional)' : 'Selecione o assunto *'}</option>
+                        {editSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    )}
+                    {showPart && (
+                      <select
+                        value={editTaskForm.partId}
+                        onChange={e => setEditTaskForm(prev => ({ ...prev, partId: e.target.value }))}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="">Parte (opcional)</option>
+                        {editParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    )}
+                    {showQtd && (
+                      <input
+                        type="number"
+                        min={1}
+                        value={editTaskForm.quantidade}
+                        onChange={e => setEditTaskForm(prev => ({ ...prev, quantidade: e.target.value }))}
+                        placeholder="Quantidade (opcional)"
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => setEditingTaskIndex(null)}
+                  className="flex-1 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted/50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveEditTask}
+                  className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Modal de pendências de cadastro */}
       {showPendingPanel && isAdmin && (() => {

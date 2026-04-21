@@ -4,7 +4,7 @@
 //
 // INÍCIO DO PLANO: 2026-04-01 (use PLAN_START_DATE de studyNowUtils.ts)
 
-export type StudyTaskType = 'questoes' | 'teoria' | 'lei_seca' | 'simulado' | 'revisao'
+export type StudyTaskType = 'questoes' | 'teoria' | 'lei_seca' | 'simulado' | 'revisao' | 'bateria'
 
 export type StudyDayKey = 'seg' | 'ter' | 'qua' | 'qui' | 'sex' | 'sab' | 'dom'
 
@@ -923,6 +923,7 @@ export const TASK_TYPE_LABELS: Record<StudyTaskType, string> = {
   lei_seca: 'Lei Seca',
   simulado: 'Simulado',
   revisao: 'Revisão',
+  bateria: 'Bateria',
 }
 
 export const TASK_TYPE_COLORS: Record<StudyTaskType, string> = {
@@ -931,4 +932,5 @@ export const TASK_TYPE_COLORS: Record<StudyTaskType, string> = {
   lei_seca: 'bg-amber-500/10 text-amber-700 border-amber-500/20',
   simulado: 'bg-red-500/10 text-red-700 border-red-500/20',
   revisao: 'bg-green-500/10 text-green-700 border-green-500/20',
+  bateria: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/20',
 }

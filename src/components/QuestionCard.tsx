@@ -1,10 +1,10 @@
-﻿﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Flag, ChevronDown, ChevronUp, Bookmark, Lightbulb, Scissors, BookOpen, Pencil, X, Check } from 'lucide-react'
 import { cn, normalizeAnswer, displayAnswer } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import { submitReport, saveQuestion } from '@/lib/dataService'
-import { sanitizeRichTextForRender } from '@/lib/richText'
+import { extractEmphasisFromHtml, sanitizeRichTextForRender } from '@/lib/richText'
 import { toast } from 'sonner'
 import type { Question, QuestionType } from '@/types'
 import { QuestionChat } from './QuestionChat'
@@ -293,9 +293,20 @@ export function QuestionCard({
           <textarea
             value={editForm.statement}
             onChange={e => setEditForm({ ...editForm, statement: e.target.value })}
+            onPaste={e => {
+              const html = e.clipboardData.getData('text/html')
+              if (!html) return
+              e.preventDefault()
+              const sanitized = extractEmphasisFromHtml(html)
+              const target = e.target as HTMLTextAreaElement
+              const start = target.selectionStart
+              const end = target.selectionEnd
+              setEditForm(f => f ? { ...f, statement: f.statement.substring(0, start) + sanitized + f.statement.substring(end) } : f)
+            }}
             placeholder="Enunciado *"
-            rows={4}
-            className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-y md:resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+            rows={5}
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+            style={{ minHeight: '6rem' }}
           />
 
           {/* Alternatives */}
@@ -303,27 +314,28 @@ export function QuestionCard({
             <div className="flex flex-col gap-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Alternativas</p>
               {editForm.options.map((opt, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="font-bold text-sm w-5 shrink-0">{opt.letter}.</span>
+                <div key={i} className="flex items-start gap-2">
+                  <span className="font-bold text-sm w-5 shrink-0 pt-1.5">{opt.letter}.</span>
                   <textarea
                     value={opt.text}
-                    rows={1}
+                    rows={2}
                     onChange={e => {
                       const opts = [...editForm.options]
-                      opts[i] = { ...opts[i], text: e.target.value.replace(/\n/g, '') }
+                      opts[i] = { ...opts[i], text: e.target.value }
                       setEditForm({ ...editForm, options: opts })
                     }}
-                    onKeyDown={e => {
-                      // Bloqueia quebra de linha; Enter conclui ediÃ§Ã£o no mobile
-                      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
-                        e.preventDefault()
-                        e.currentTarget.blur()
-                      }
+                    onPaste={e => {
+                      const html = e.clipboardData.getData('text/html')
+                      if (!html) return
+                      e.preventDefault()
+                      const text = extractEmphasisFromHtml(html)
+                      const opts = [...editForm.options]
+                      opts[i] = { ...opts[i], text }
+                      setEditForm({ ...editForm, options: opts })
                     }}
-                    enterKeyHint="done"
                     placeholder={`Alternativa ${opt.letter}`}
-                    className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                    style={{ resize: 'none', overflowX: 'auto', overflowY: 'hidden', whiteSpace: 'nowrap' }}
+                    className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+                    style={{ minHeight: '4rem' }}
                   />
                 </div>
               ))}
@@ -409,6 +421,16 @@ export function QuestionCard({
               value={editForm.comment}
               onChange={e => setEditForm({ ...editForm, comment: e.target.value })}
               onInput={e => autoResizeMobileTextarea(e.currentTarget)}
+              onPaste={e => {
+                const html = e.clipboardData.getData('text/html')
+                if (!html) return
+                e.preventDefault()
+                const sanitized = extractEmphasisFromHtml(html, true)
+                const target = e.target as HTMLTextAreaElement
+                const start = target.selectionStart
+                const end = target.selectionEnd
+                setEditForm(f => f ? { ...f, comment: f.comment.substring(0, start) + sanitized + f.comment.substring(end) } : f)
+              }}
               enterKeyHint="enter"
               placeholder="Comentário / explicação"
               rows={7}
@@ -438,6 +460,12 @@ export function QuestionCard({
           <textarea
             value={editForm.associated_text}
             onChange={e => setEditForm({ ...editForm, associated_text: e.target.value })}
+            onPaste={e => {
+              const html = e.clipboardData.getData('text/html')
+              if (!html) return
+              e.preventDefault()
+              setEditForm(f => f ? { ...f, associated_text: extractEmphasisFromHtml(html) } : f)
+            }}
             placeholder="Texto associado (opcional)"
             rows={2}
             className="rounded-md border border-border bg-background px-3 py-2 text-sm resize-y md:resize-none focus:outline-none focus:ring-2 focus:ring-primary"

@@ -1,6 +1,6 @@
 import type { Discipline, Flashcard, Subject, SubjectPart } from '@/types'
 import { studyPlan, getDayPlan } from '@/data/studyPlan'
-import type { StudyTask, StudyDayKey, StudyDayPlan } from '@/data/studyPlan'
+import type { StudyTask, StudyDayKey, StudyDayPlan, StudyTaskType } from '@/data/studyPlan'
 
 // ---------------------------------------------------------------------------
 // Configuração de datas do plano
@@ -140,6 +140,7 @@ export interface ResolvedTask extends StudyTask {
   mappedPathLabel: string | null
   requiresManualSetup: boolean
   setupHint: string | null
+  bateriaConfig?: BateriaConfig
 }
 
 export function resolveTaskMapping(
@@ -559,7 +560,7 @@ export function getWeekMeta(semana: number): { questoesMeta: number; acertoMeta:
 }
 
 export function buildStudyPath(task: ResolvedTask): string | null {
-  if (task.tipo === 'simulado') return '/simulado'
+  if (task.tipo === 'simulado' || task.tipo === 'bateria') return '/simulado'
 
   // Revisão/flashcards: link direto para a disciplina de flashcards
   if (task.tipo === 'revisao') {
@@ -686,3 +687,149 @@ export function buildDaySummaryForWeek(
 // Re-exports convenientes
 export { studyPlan, getDayPlan }
 export type { StudyTask, StudyDayKey, StudyDayPlan, ResolvedTask as ResolvedStudyTask }
+
+// ---------------------------------------------------------------------------
+// Persistência de overrides de tarefas do admin por semana/dia
+// ---------------------------------------------------------------------------
+
+export type BateriaMode = 'escopo' | 'mista'
+
+export interface BateriaSelecao {
+  disciplineId: string
+  subjectIds: string[]
+}
+
+export interface BateriaConfig {
+  mode: BateriaMode
+  selecoes: BateriaSelecao[]
+  quantidade: number
+  tempo?: number
+}
+
+export interface AdminTaskData {
+  id: string
+  tipo: StudyTaskType
+  disciplinaId: string
+  subjectId: string
+  partId: string
+  quantidade: string
+  bateriaConfig?: BateriaConfig
+}
+
+export interface DayTaskOverrides {
+  edited: Record<string, AdminTaskData>
+  removed: string[]
+  extras: AdminTaskData[]
+  order: string[] | null
+}
+
+function dayOverridesKey(semana: number, dia: StudyDayKey): string {
+  return `provamax_admin_overrides_${semana}_${dia}`
+}
+
+export function loadDayOverrides(semana: number, dia: StudyDayKey): DayTaskOverrides {
+  try {
+    const raw = localStorage.getItem(dayOverridesKey(semana, dia))
+    if (!raw) return { edited: {}, removed: [], extras: [], order: null }
+    return JSON.parse(raw) as DayTaskOverrides
+  } catch {
+    return { edited: {}, removed: [], extras: [], order: null }
+  }
+}
+
+export function saveDayOverrides(semana: number, dia: StudyDayKey, overrides: DayTaskOverrides): void {
+  try {
+    localStorage.setItem(dayOverridesKey(semana, dia), JSON.stringify(overrides))
+  } catch { /* noop */ }
+}
+
+export function buildResolvedTaskFromAdmin(
+  data: AdminTaskData,
+  disciplines: Discipline[],
+  subjects: Subject[],
+  parts: SubjectPart[],
+): ResolvedTask {
+  const disc = disciplines.find(d => d.id === data.disciplinaId)
+  const subj = data.subjectId ? subjects.find(s => s.id === data.subjectId) : null
+  const part = data.partId ? parts.find(p => p.id === data.partId) : null
+  const discName = disc?.name ?? ''
+  const subjName = subj?.name ?? ''
+  const pathLabel = disc
+    ? `${discName}${subj ? ` › ${subjName}` : ''}${part ? ` › ${part.name}` : ''}`
+    : null
+
+  if (data.tipo === 'bateria' && data.bateriaConfig) {
+    const { selecoes, quantidade } = data.bateriaConfig
+    const discNames = selecoes
+      .map(s => disciplines.find(d => d.id === s.disciplineId)?.name ?? '')
+      .filter(Boolean)
+    const bateriaLabel = `Bateria ${data.bateriaConfig.mode === 'mista' ? 'Mista' : 'Escopo'} — ${discNames.join(', ')} — ${quantidade}q`
+    return {
+      id: data.id,
+      disciplina: discNames[0] ?? 'Bateria',
+      assunto: bateriaLabel,
+      tipo: 'bateria',
+      quantidade: quantidade || undefined,
+      mappedDisciplineId: selecoes[0]?.disciplineId ?? null,
+      mappedSubjectId: null,
+      mappedPartId: null,
+      mappedPathLabel: bateriaLabel,
+      requiresManualSetup: false,
+      setupHint: null,
+      bateriaConfig: data.bateriaConfig,
+    }
+  }
+
+  return {
+    id: data.id,
+    disciplina: discName,
+    assunto: subjName || discName,
+    tipo: data.tipo,
+    quantidade: data.quantidade ? Number.parseInt(data.quantidade, 10) : undefined,
+    mappedDisciplineId: data.disciplinaId || null,
+    mappedSubjectId: data.subjectId || null,
+    mappedPartId: data.partId || null,
+    mappedPathLabel: pathLabel,
+    requiresManualSetup: false,
+    setupHint: null,
+  }
+}
+
+export function applyDayOverrides(
+  planTasks: ResolvedTask[],
+  overrides: DayTaskOverrides,
+  disciplines: Discipline[],
+  subjects: Subject[],
+  parts: SubjectPart[],
+): ResolvedTask[] {
+  // 1. Remove tarefas excluídas do plano
+  let tasks = planTasks.filter(t => !overrides.removed.includes(t.id))
+
+  // 2. Aplica edições sobre tarefas do plano
+  tasks = tasks.map(t => {
+    const edit = overrides.edited[t.id]
+    if (!edit) return t
+    return buildResolvedTaskFromAdmin(edit, disciplines, subjects, parts)
+  })
+
+  // 3. Adiciona extras do admin
+  for (const extra of overrides.extras) {
+    tasks.push(buildResolvedTaskFromAdmin(extra, disciplines, subjects, parts))
+  }
+
+  // 4. Aplica ordem personalizada
+  if (overrides.order && overrides.order.length > 0) {
+    const idToTask = new Map(tasks.map(t => [t.id, t]))
+    const ordered: ResolvedTask[] = []
+    for (const id of overrides.order) {
+      const t = idToTask.get(id)
+      if (t) ordered.push(t)
+    }
+    for (const t of tasks) {
+      if (!ordered.some(o => o.id === t.id)) ordered.push(t)
+    }
+    tasks = ordered
+  }
+
+  return tasks
+}
