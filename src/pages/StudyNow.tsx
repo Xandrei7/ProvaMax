@@ -3,11 +3,12 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   BookOpen, CheckCircle2, Clock, ChevronRight, ChevronLeft, AlertTriangle,
   SkipForward, RotateCcw, Target, XCircle, Play, Zap, ExternalLink,
-  ListChecks, Settings, Pencil, Plus, ChevronUp, ChevronDown, Trash2,
+  ListChecks, Settings, Pencil, Plus, ChevronUp, ChevronDown, Trash2, Type,
 } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
 import { BottomNav } from '@/components/BottomNav'
-import { getDisciplines, getSubjects, getSubjectParts, saveSubject } from '@/lib/dataService'
+import { getDisciplines, getSubjects, getSubjectParts, saveSubject, saveSubjectPart, getQuestions } from '@/lib/dataService'
+import { Import } from '@/pages/Import'
 import type { Discipline, Subject, SubjectPart } from '@/types'
 import {
   getCurrentWeek, getCurrentDayKey, getPlanForDay, getWeeksForManualSelect,
@@ -154,7 +155,16 @@ export function StudyNow() {
   const defaultBateriaConfig: BateriaConfig = { mode: 'escopo', selecoes: [], quantidade: 10 }
   const [bateriaConfig, setBateriaConfig] = useState<BateriaConfig>(defaultBateriaConfig)
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null)
-  const [dayOverrides, setDayOverrides] = useState<DayTaskOverrides>({ edited: {}, removed: [], extras: [], order: null })
+  const [dayOverrides, setDayOverrides] = useState<DayTaskOverrides>({ edited: {}, removed: [], extras: [], order: null, customLabels: {} })
+
+  const [addInlineSub, setAddInlineSub] = useState({ show: false, name: '', saving: false })
+  const [addInlinePart, setAddInlinePart] = useState({ show: false, name: '', saving: false })
+  const [editInlineSub, setEditInlineSub] = useState({ show: false, name: '', saving: false })
+  const [editInlinePart, setEditInlinePart] = useState({ show: false, name: '', saving: false })
+  const [renamingTaskIndex, setRenamingTaskIndex] = useState<number | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [showInlineImporter, setShowInlineImporter] = useState(false)
+  const [currentTaskQCount, setCurrentTaskQCount] = useState<number | null>(null)
 
   // Carrega dados do banco
   useEffect(() => {
@@ -213,6 +223,20 @@ export function StudyNow() {
   const progress = session ? getSessionProgress(session) : null
   const weekMeta = getWeekMeta(selectedWeek)
 
+  // Busca contagem de questões quando admin abre a task view de uma tarefa tipo questoes
+  useEffect(() => {
+    if (!isAdmin || view !== 'task' || !currentTask || currentTask.tipo !== 'questoes') {
+      setCurrentTaskQCount(null)
+      return
+    }
+    const subId = currentTask.mappedSubjectId
+    const partId = currentTask.mappedPartId
+    if (!subId) { setCurrentTaskQCount(null); return }
+    getQuestions(partId ? { subjectId: subId, partId } : { subjectId: subId })
+      .then(qs => setCurrentTaskQCount(qs.length))
+      .catch(() => setCurrentTaskQCount(null))
+  }, [isAdmin, view, currentTask?.id])
+
   // ---------------------------------------------------------------------------
   // Ações
   // ---------------------------------------------------------------------------
@@ -265,6 +289,104 @@ export function StudyNow() {
   function updateOverrides(newOverrides: DayTaskOverrides) {
     saveDayOverrides(selectedWeek, selectedDay, newOverrides)
     setDayOverrides(newOverrides)
+  }
+
+  async function handleCreateInlineAddSub() {
+    const name = addInlineSub.name.trim()
+    if (!name || !addTaskForm.disciplinaId) return
+    const dup = subjects.some(s => s.name.toLowerCase() === name.toLowerCase() && s.discipline_id === addTaskForm.disciplinaId)
+    if (dup) { toast.error('Já existe um assunto com este nome nesta disciplina.'); return }
+    setAddInlineSub(p => ({ ...p, saving: true }))
+    try {
+      await saveSubject({ name, discipline_id: addTaskForm.disciplinaId, sort_order: 0 })
+      const updated = await getSubjects()
+      setSubjects(updated)
+      const created = updated.find(s => s.name === name && s.discipline_id === addTaskForm.disciplinaId)
+      if (created) setAddTaskForm(p => ({ ...p, subjectId: created.id, partId: '' }))
+      setAddInlineSub({ show: false, name: '', saving: false })
+      toast.success('Assunto criado e selecionado!')
+    } catch { toast.error('Erro ao criar assunto.'); setAddInlineSub(p => ({ ...p, saving: false })) }
+  }
+
+  async function handleCreateInlineAddPart() {
+    const name = addInlinePart.name.trim()
+    if (!name || !addTaskForm.subjectId) return
+    const dup = parts.some(p => p.name.toLowerCase() === name.toLowerCase() && p.subject_id === addTaskForm.subjectId)
+    if (dup) { toast.error('Já existe uma parte com este nome neste assunto.'); return }
+    setAddInlinePart(p => ({ ...p, saving: true }))
+    try {
+      await saveSubjectPart({ name, subject_id: addTaskForm.subjectId, sort_order: 0 })
+      const updated = await getSubjectParts()
+      setParts(updated)
+      const created = updated.find(p => p.name === name && p.subject_id === addTaskForm.subjectId)
+      if (created) setAddTaskForm(p => ({ ...p, partId: created.id }))
+      setAddInlinePart({ show: false, name: '', saving: false })
+      toast.success('Parte criada e selecionada!')
+    } catch { toast.error('Erro ao criar parte.'); setAddInlinePart(p => ({ ...p, saving: false })) }
+  }
+
+  async function handleCreateInlineEditSub() {
+    const name = editInlineSub.name.trim()
+    if (!name || !editTaskForm.disciplinaId) return
+    const dup = subjects.some(s => s.name.toLowerCase() === name.toLowerCase() && s.discipline_id === editTaskForm.disciplinaId)
+    if (dup) { toast.error('Já existe um assunto com este nome nesta disciplina.'); return }
+    setEditInlineSub(p => ({ ...p, saving: true }))
+    try {
+      await saveSubject({ name, discipline_id: editTaskForm.disciplinaId, sort_order: 0 })
+      const updated = await getSubjects()
+      setSubjects(updated)
+      const created = updated.find(s => s.name === name && s.discipline_id === editTaskForm.disciplinaId)
+      if (created) setEditTaskForm(p => ({ ...p, subjectId: created.id, partId: '' }))
+      setEditInlineSub({ show: false, name: '', saving: false })
+      toast.success('Assunto criado e selecionado!')
+    } catch { toast.error('Erro ao criar assunto.'); setEditInlineSub(p => ({ ...p, saving: false })) }
+  }
+
+  async function handleCreateInlineEditPart() {
+    const name = editInlinePart.name.trim()
+    if (!name || !editTaskForm.subjectId) return
+    const dup = parts.some(p => p.name.toLowerCase() === name.toLowerCase() && p.subject_id === editTaskForm.subjectId)
+    if (dup) { toast.error('Já existe uma parte com este nome neste assunto.'); return }
+    setEditInlinePart(p => ({ ...p, saving: true }))
+    try {
+      await saveSubjectPart({ name, subject_id: editTaskForm.subjectId, sort_order: 0 })
+      const updated = await getSubjectParts()
+      setParts(updated)
+      const created = updated.find(p => p.name === name && p.subject_id === editTaskForm.subjectId)
+      if (created) setEditTaskForm(p => ({ ...p, partId: created.id }))
+      setEditInlinePart({ show: false, name: '', saving: false })
+      toast.success('Parte criada e selecionada!')
+    } catch { toast.error('Erro ao criar parte.'); setEditInlinePart(p => ({ ...p, saving: false })) }
+  }
+
+  function handleRenameTask(index: number) {
+    const task = resolvedTasks[index]
+    if (!task) return
+    const current = dayOverrides.customLabels?.[task.id] ?? task.assunto
+    setRenameValue(current)
+    setRenamingTaskIndex(index)
+  }
+
+  function handleImportSuccess(_count: number) {
+    setShowInlineImporter(false)
+    if (!currentTask || currentTask.tipo !== 'questoes') return
+    const subId = currentTask.mappedSubjectId
+    const partId = currentTask.mappedPartId
+    if (!subId) return
+    getQuestions(partId ? { subjectId: subId, partId } : { subjectId: subId })
+      .then(qs => setCurrentTaskQCount(qs.length))
+      .catch(() => {})
+  }
+
+  function handleConfirmRename() {
+    if (renamingTaskIndex === null) return
+    const task = resolvedTasks[renamingTaskIndex]
+    if (!task) return
+    const newLabel = renameValue.trim()
+    const customLabels = { ...(dayOverrides.customLabels ?? {}), [task.id]: newLabel || task.assunto }
+    updateOverrides({ ...dayOverrides, customLabels })
+    setRenamingTaskIndex(null)
+    setRenameValue('')
   }
 
   // Calcula todos os subjects/disciplines cobertos pelo plano até (e incluindo) upToWeek/upToDay.
@@ -962,11 +1084,11 @@ export function StudyNow() {
                     </button>
                   ) : isAdmin ? (
                     <button
-                      onClick={() => navigate('/import', { state: importFallbackState })}
+                      onClick={() => setShowInlineImporter(true)}
                       className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors"
                     >
                       <Settings size={12} />
-                      Importar / Cadastrar
+                      Importar questões
                     </button>
                   ) : null}
                   <button
@@ -991,7 +1113,8 @@ export function StudyNow() {
           <div className="flex flex-col gap-2 mb-4">
 
             {/* Navegar direto — mostra sempre que houver path, independente de requiresManualSetup */}
-            {path && (
+            {/* Para questoes sem questões cadastradas: admin vê importer em vez do botão normal */}
+            {path && !(isAdmin && currentTask.tipo === 'questoes' && currentTaskQCount === 0) && (
               <button
                 onClick={() => handleNavigateToTask(currentTask)}
                 className={`flex items-center justify-between rounded-xl px-5 py-4 font-semibold transition-all ${
@@ -1013,6 +1136,34 @@ export function StudyNow() {
                   </span>
                 </div>
                 <ExternalLink size={15} />
+              </button>
+            )}
+
+            {/* Admin: importar questões quando count = 0 (sem questões ainda) */}
+            {isAdmin && path && currentTask.tipo === 'questoes' && currentTaskQCount === 0 && (
+              <button
+                onClick={() => setShowInlineImporter(true)}
+                className="flex items-center justify-between rounded-xl px-5 py-4 font-semibold transition-all bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                <div className="flex items-center gap-2">
+                  <Zap size={16} />
+                  <span>Importar questões</span>
+                </div>
+                <ExternalLink size={15} />
+              </button>
+            )}
+
+            {/* Admin: acrescentar questões quando já há questões */}
+            {isAdmin && path && currentTask.tipo === 'questoes' && currentTaskQCount !== null && currentTaskQCount > 0 && (
+              <button
+                onClick={() => setShowInlineImporter(true)}
+                className="flex items-center justify-between rounded-xl border border-primary/30 px-5 py-3 text-sm font-medium transition-all text-primary hover:bg-primary/5"
+              >
+                <div className="flex items-center gap-2">
+                  <Plus size={15} />
+                  <span>Acrescentar questões ({currentTaskQCount} disponíveis)</span>
+                </div>
+                <ExternalLink size={14} />
               </button>
             )}
 
@@ -1218,6 +1369,22 @@ export function StudyNow() {
             </div>
           )
         })()}
+
+        {/* Modal inline do importador de questões (somente admin) */}
+        {showInlineImporter && isAdmin && currentTask && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-0 sm:items-start sm:px-3 sm:pt-6">
+            <div className="w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-border bg-card shadow-2xl flex flex-col max-h-[92vh] overflow-y-auto">
+              <div className="px-4 pt-4 pb-0">
+                <Import
+                  embedded
+                  initialContext={{ disciplina: currentTask.disciplina, assunto: currentTask.assunto }}
+                  onSuccess={handleImportSuccess}
+                  onCancel={() => setShowInlineImporter(false)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         <BottomNav />
       </div>
@@ -1509,7 +1676,23 @@ export function StudyNow() {
                         )}
                       </div>
                       <p className="text-xs font-semibold text-muted-foreground">{task.disciplina}</p>
-                      <p className="text-sm font-medium text-foreground leading-snug truncate">{task.assunto}</p>
+                      {renamingTaskIndex === index ? (
+                        <div className="flex gap-1 mt-0.5" onClick={e => e.stopPropagation()}>
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={e => setRenameValue(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleConfirmRename(); if (e.key === 'Escape') { setRenamingTaskIndex(null); setRenameValue('') } }}
+                            className="flex-1 min-w-0 rounded border border-primary bg-background px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                          <button type="button" onClick={handleConfirmRename} className="rounded bg-primary px-2 py-0.5 text-xs text-primary-foreground">✓</button>
+                          <button type="button" onClick={() => { setRenamingTaskIndex(null); setRenameValue('') }} className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">✕</button>
+                        </div>
+                      ) : (
+                        <p className="text-sm font-medium text-foreground leading-snug truncate">
+                          {dayOverrides.customLabels?.[task.id] ?? task.assunto}
+                        </p>
+                      )}
                       {task.mappedPathLabel && !task.requiresManualSetup && (
                         <p className="text-xs text-muted-foreground/60 truncate mt-0.5">{task.mappedPathLabel}</p>
                       )}
@@ -1542,6 +1725,13 @@ export function StudyNow() {
                           title="Editar tarefa"
                         >
                           <Pencil size={12} />
+                        </button>
+                        <button
+                          onClick={() => handleRenameTask(index)}
+                          className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                          title="Renomear tarefa"
+                        >
+                          <Type size={12} />
                         </button>
                         {confirmDeleteIndex === index ? (
                           <button
@@ -1729,14 +1919,51 @@ export function StudyNow() {
                       {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                     {showSubject && addTaskForm.disciplinaId && (
-                      <select
-                        value={addTaskForm.subjectId}
-                        onChange={e => setAddTaskForm(prev => ({ ...prev, subjectId: e.target.value, partId: '' }))}
-                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      >
-                        <option value="">{addTaskForm.tipo === 'revisao' ? 'Assunto (opcional)' : 'Selecione o assunto *'}</option>
-                        {addSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
+                      <>
+                        <select
+                          value={addTaskForm.subjectId}
+                          onChange={e => {
+                            if (e.target.value === '__new_sub__') {
+                              setAddInlineSub({ show: true, name: '', saving: false })
+                            } else {
+                              setAddInlineSub({ show: false, name: '', saving: false })
+                              setAddTaskForm(prev => ({ ...prev, subjectId: e.target.value, partId: '' }))
+                            }
+                          }}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">{addTaskForm.tipo === 'revisao' ? 'Assunto (opcional)' : 'Selecione o assunto *'}</option>
+                          {addSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                          <option value="__new_sub__">+ Criar novo assunto</option>
+                        </select>
+                        {addInlineSub.show && (
+                          <div className="flex gap-2">
+                            <input
+                              autoFocus
+                              value={addInlineSub.name}
+                              onChange={e => setAddInlineSub(p => ({ ...p, name: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleCreateInlineAddSub(); if (e.key === 'Escape') setAddInlineSub({ show: false, name: '', saving: false }) }}
+                              placeholder="Nome do novo assunto"
+                              className="flex-1 rounded-lg border border-primary bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                            />
+                            <button
+                              type="button"
+                              disabled={addInlineSub.saving || !addInlineSub.name.trim()}
+                              onClick={handleCreateInlineAddSub}
+                              className="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                            >
+                              {addInlineSub.saving ? '...' : 'Salvar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAddInlineSub({ show: false, name: '', saving: false })}
+                              className="rounded-lg border border-border px-2 py-2 text-xs text-muted-foreground"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                     {/* Lei Seca: campo de link (entre assunto e parte) */}
                     {addTaskForm.tipo === 'lei_seca' && addTaskForm.subjectId && (
@@ -1749,14 +1976,51 @@ export function StudyNow() {
                       />
                     )}
                     {showPart && (
-                      <select
-                        value={addTaskForm.partId}
-                        onChange={e => setAddTaskForm(prev => ({ ...prev, partId: e.target.value }))}
-                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      >
-                        <option value="">Parte (opcional)</option>
-                        {addParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                      </select>
+                      <>
+                        <select
+                          value={addTaskForm.partId}
+                          onChange={e => {
+                            if (e.target.value === '__new_part__') {
+                              setAddInlinePart({ show: true, name: '', saving: false })
+                            } else {
+                              setAddInlinePart({ show: false, name: '', saving: false })
+                              setAddTaskForm(prev => ({ ...prev, partId: e.target.value }))
+                            }
+                          }}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">Parte (opcional)</option>
+                          {addParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          <option value="__new_part__">+ Criar nova parte</option>
+                        </select>
+                        {addInlinePart.show && (
+                          <div className="flex gap-2">
+                            <input
+                              autoFocus
+                              value={addInlinePart.name}
+                              onChange={e => setAddInlinePart(p => ({ ...p, name: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleCreateInlineAddPart(); if (e.key === 'Escape') setAddInlinePart({ show: false, name: '', saving: false }) }}
+                              placeholder="Nome da nova parte"
+                              className="flex-1 rounded-lg border border-primary bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                            />
+                            <button
+                              type="button"
+                              disabled={addInlinePart.saving || !addInlinePart.name.trim()}
+                              onClick={handleCreateInlineAddPart}
+                              className="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                            >
+                              {addInlinePart.saving ? '...' : 'Salvar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAddInlinePart({ show: false, name: '', saving: false })}
+                              className="rounded-lg border border-border px-2 py-2 text-xs text-muted-foreground"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                     {showQtd && (
                       <input type="number" min={1} value={addTaskForm.quantidade}
@@ -1969,14 +2233,51 @@ export function StudyNow() {
                       {disciplines.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                     {showSubject && editTaskForm.disciplinaId && (
-                      <select
-                        value={editTaskForm.subjectId}
-                        onChange={e => setEditTaskForm(prev => ({ ...prev, subjectId: e.target.value, partId: '' }))}
-                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      >
-                        <option value="">{editTaskForm.tipo === 'revisao' ? 'Assunto (opcional)' : 'Selecione o assunto *'}</option>
-                        {editSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
+                      <>
+                        <select
+                          value={editTaskForm.subjectId}
+                          onChange={e => {
+                            if (e.target.value === '__new_sub__') {
+                              setEditInlineSub({ show: true, name: '', saving: false })
+                            } else {
+                              setEditInlineSub({ show: false, name: '', saving: false })
+                              setEditTaskForm(prev => ({ ...prev, subjectId: e.target.value, partId: '' }))
+                            }
+                          }}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">{editTaskForm.tipo === 'revisao' ? 'Assunto (opcional)' : 'Selecione o assunto *'}</option>
+                          {editSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                          <option value="__new_sub__">+ Criar novo assunto</option>
+                        </select>
+                        {editInlineSub.show && (
+                          <div className="flex gap-2">
+                            <input
+                              autoFocus
+                              value={editInlineSub.name}
+                              onChange={e => setEditInlineSub(p => ({ ...p, name: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleCreateInlineEditSub(); if (e.key === 'Escape') setEditInlineSub({ show: false, name: '', saving: false }) }}
+                              placeholder="Nome do novo assunto"
+                              className="flex-1 rounded-lg border border-primary bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                            />
+                            <button
+                              type="button"
+                              disabled={editInlineSub.saving || !editInlineSub.name.trim()}
+                              onClick={handleCreateInlineEditSub}
+                              className="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                            >
+                              {editInlineSub.saving ? '...' : 'Salvar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditInlineSub({ show: false, name: '', saving: false })}
+                              className="rounded-lg border border-border px-2 py-2 text-xs text-muted-foreground"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                     {/* Lei Seca: campo de link (entre assunto e parte) */}
                     {editTaskForm.tipo === 'lei_seca' && editTaskForm.subjectId && (
@@ -1989,14 +2290,51 @@ export function StudyNow() {
                       />
                     )}
                     {showPart && (
-                      <select
-                        value={editTaskForm.partId}
-                        onChange={e => setEditTaskForm(prev => ({ ...prev, partId: e.target.value }))}
-                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      >
-                        <option value="">Parte (opcional)</option>
-                        {editParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                      </select>
+                      <>
+                        <select
+                          value={editTaskForm.partId}
+                          onChange={e => {
+                            if (e.target.value === '__new_part__') {
+                              setEditInlinePart({ show: true, name: '', saving: false })
+                            } else {
+                              setEditInlinePart({ show: false, name: '', saving: false })
+                              setEditTaskForm(prev => ({ ...prev, partId: e.target.value }))
+                            }
+                          }}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        >
+                          <option value="">Parte (opcional)</option>
+                          {editParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          <option value="__new_part__">+ Criar nova parte</option>
+                        </select>
+                        {editInlinePart.show && (
+                          <div className="flex gap-2">
+                            <input
+                              autoFocus
+                              value={editInlinePart.name}
+                              onChange={e => setEditInlinePart(p => ({ ...p, name: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleCreateInlineEditPart(); if (e.key === 'Escape') setEditInlinePart({ show: false, name: '', saving: false }) }}
+                              placeholder="Nome da nova parte"
+                              className="flex-1 rounded-lg border border-primary bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                            />
+                            <button
+                              type="button"
+                              disabled={editInlinePart.saving || !editInlinePart.name.trim()}
+                              onClick={handleCreateInlineEditPart}
+                              className="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                            >
+                              {editInlinePart.saving ? '...' : 'Salvar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditInlinePart({ show: false, name: '', saving: false })}
+                              className="rounded-lg border border-border px-2 py-2 text-xs text-muted-foreground"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                     {showQtd && (
                       <input

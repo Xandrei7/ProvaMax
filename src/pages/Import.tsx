@@ -159,12 +159,21 @@ function normStr(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/\p{Mn}/gu, '').trim()
 }
 
-export function Import() {
+interface EmbeddedImportProps {
+  embedded?: boolean
+  initialContext?: { disciplina: string; assunto: string; parte?: string }
+  onSuccess?: (count: number) => void
+  onCancel?: () => void
+}
+
+export function Import({ embedded, initialContext, onSuccess, onCancel }: EmbeddedImportProps = {}) {
   const navigate = useNavigate()
   const location = useLocation()
-  const fromStudyNowState = (location.state as StudyNowImportState | null)?.fromStudyNow
-    ? (location.state as StudyNowImportState)
-    : null
+  const fromStudyNowState = embedded && initialContext
+    ? { fromStudyNow: true as const, disciplina: initialContext.disciplina, assunto: initialContext.assunto }
+    : (location.state as StudyNowImportState | null)?.fromStudyNow
+      ? (location.state as StudyNowImportState)
+      : null
 
   const [disciplines, setDisciplines] = useState<Discipline[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
@@ -241,7 +250,7 @@ export function Import() {
     return core + '\x01' + (options ?? []).map(o => clean(o.text)).join('\x00')
   }
 
-  async function handleParse() {
+  function handleParse() {
     if (!disciplineName.trim()) return toast.error('Informe o nome da Matéria.')
     if (!subjectName.trim()) return toast.error('Informe o nome do Assunto.')
 
@@ -249,92 +258,81 @@ export function Import() {
     const currentRawText = textareaRef.current?.value || rawText
     if (!currentRawText.trim()) return toast.error('Cole as questões no campo de texto.')
 
-    // Normalização inicial para Mobile (Causa: falta de quebras de linha ou caracteres exóticos)
-    let text = normalizeInlineAlternativeBreaks(
-      currentRawText
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .normalize('NFC')
-        .replace(/\u00A0/g, ' ')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '')
-        .replace(/\u00AD/g, ''),
-      INLINE_ALT_MARKER_REGEX,
-    ).trim()
-      
-    // --- CAMADA ADITIVA MOBILE ISOLADA (Alternativas colapsadas) ---
-    // Só ativa se NÃO houver alternativas já formatadas (a) / A) ).
-    // Se o texto já tem "a) " ou "A) ", ele vem do PC com formato correto
-    // e o heurístico de colapso NÃO deve tocar nele.
-    const hasProperAlternatives = /^[ \t]*[a-eA-E][.)]\s/m.test(text)
-    if (!hasProperAlternatives) {
-      const collapsedRun = findCollapsedAlternativeRun(text)
-      if (collapsedRun.length > 0) {
-        text = normalizeCollapsedAlternativeRun(text, collapsedRun)
-      }
-    }
-    // ---------------------------------------------------------------
-
-    // Normalização agressiva para mobile (Causa Raiz: falta de quebras de linha em colagens mobile)
-    const finalNormalizedText = text
-      .replace(/\n{2,}/g, '\n\n') // Reduz excessos
-      .replace(/(\n|^)([ \t]+)(\d+[.)]\s+)/g, '$1$3') // Remove espaços antes de números
-      // Caso o texto não tenha NENHUMA quebra de linha (colagem compacta mobile)
-      // Tenta inserir quebras antes de números de questão.
-      // [^ \n0-9] exclui dígitos do trigger para não quebrar números dentro de
-      // outros números (ex: não transformar "2025)" em "2\n025)" nem "10." em "1\n0."):
-      .replace(/([^ \n0-9])(\d+[.)]\s+[A-Z])/g, '$1\n$2')
-      // Garante que o Gabarito esteja isolado
-      .replace(/([^\n])(GABARITO\s*COMENTADO)/i, '$1\n\n$2')
-      .replace(/(GABARITO\s*COMENTADO)([^\n])/i, '$1\n\n$2')
-
-    const normalizedForAlternatives = normalizeInlineAlternativeBreaks(finalNormalizedText, INLINE_ALT_MARKER_REGEX)
-
-    const questions = parseQuestionsText(normalizedForAlternatives)
-
-    if (questions.length === 0) {
-      return toast.error(
-        'Nenhuma questão encontrada. Verifique se o texto está no formato correto:\n"1.\nEnunciado\na) opção\nb) opção\n...\nGABARITO COMENTADO\n1. C\nComentário..."'
-      )
-    }
-
-    // ── Trava de duplicidade na prévia ────────────────────────────────────────
     setParsing(true)
-    let finalQuestions = questions
+
     try {
-      const disc = disciplines.find(
-        d => d.name.trim().toLowerCase() === disciplineName.trim().toLowerCase()
-      )
-      if (disc) {
-        const existingQs = await getQuestions({ disciplineId: disc.id })
-        const existingFps = new Set(existingQs.map(q => _fpLocal(q.statement, q.options)))
-        finalQuestions = questions.filter(q => !existingFps.has(_fpLocal(q.statement, q.options)))
-        const skipped = questions.length - finalQuestions.length
-        if (finalQuestions.length === 0) {
-          toast.error('Todas as questões coladas já existem na base. Nenhuma será importada.')
-          setParsing(false)
-          return
-        }
-        if (skipped > 0) {
-          toast.info(`${skipped} questão(ões) já existia(m) na base e foi(ram) removida(s) da prévia.`)
+      // Normalização inicial para Mobile (Causa: falta de quebras de linha ou caracteres exóticos)
+      let text = normalizeInlineAlternativeBreaks(
+        currentRawText
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n')
+          .normalize('NFC')
+          .replace(/\u00A0/g, ' ')
+          .replace(/[\u200B-\u200D\uFEFF]/g, '')
+          .replace(/\u00AD/g, ''),
+        INLINE_ALT_MARKER_REGEX,
+      ).trim()
+
+      // --- CAMADA ADITIVA MOBILE ISOLADA (Alternativas colapsadas) ---
+      // Só ativa se NÃO houver alternativas já formatadas (a) / A) ).
+      // Se o texto já tem "a) " ou "A) ", ele vem do PC com formato correto
+      // e o heurístico de colapso NÃO deve tocar nele.
+      const hasProperAlternatives = /^[ \t]*[a-eA-E][.)]\s/m.test(text)
+      if (!hasProperAlternatives) {
+        const collapsedRun = findCollapsedAlternativeRun(text)
+        if (collapsedRun.length > 0) {
+          text = normalizeCollapsedAlternativeRun(text, collapsedRun)
         }
       }
-    } catch (err) {
-      console.error('[handleParse] checagem de duplicatas falhou:', err)
-      // falha silenciosa: mostra todas as questões sem filtrar
+      // ---------------------------------------------------------------
+
+      // Normalização agressiva para mobile (Causa Raiz: falta de quebras de linha em colagens mobile)
+      const finalNormalizedText = text
+        .replace(/\n{2,}/g, '\n\n') // Reduz excessos
+        .replace(/(\n|^)([ \t]+)(\d+[.)]\s+)/g, '$1$3') // Remove espaços antes de números
+        // Caso o texto não tenha NENHUMA quebra de linha (colagem compacta mobile)
+        // Tenta inserir quebras antes de números de questão.
+        // [^ \n0-9] exclui dígitos do trigger para não quebrar números dentro de
+        // outros números (ex: não transformar "2025)" em "2\n025)" nem "10." em "1\n0."):
+        .replace(/([^ \n0-9])(\d+[.)]\s+[A-Z])/g, '$1\n$2')
+        // Garante que o Gabarito esteja isolado
+        .replace(/([^\n])(GABARITO\s*COMENTADO)/i, '$1\n\n$2')
+        .replace(/(GABARITO\s*COMENTADO)([^\n])/i, '$1\n\n$2')
+
+      const normalizedForAlternatives = normalizeInlineAlternativeBreaks(finalNormalizedText, INLINE_ALT_MARKER_REGEX)
+
+      const questions = parseQuestionsText(normalizedForAlternatives)
+      console.log("Total identificadas:", questions.length)
+
+      if (questions.length === 0) {
+        return toast.error(
+          'Nenhuma questão encontrada. Verifique se o texto está no formato correto:\n"1.\nEnunciado\na) opção\nb) opção\n...\nGABARITO COMENTADO\n1. C\nComentário..."'
+        )
+      }
+
+      const selectedDisciplineId =
+        disciplines.find(d => d.name.trim().toLowerCase() === disciplineName.trim().toLowerCase())?.id ?? ''
+      const selectedSubjectId =
+        subjects.find(s => s.name.trim().toLowerCase() === subjectName.trim().toLowerCase())?.id ?? ''
+
+      const mappedQuestions = questions.map(q => ({
+        ...q,
+        disciplineId: selectedDisciplineId,
+        subjectId: selectedSubjectId,
+      }))
+
+      const semGabarito = mappedQuestions.filter(q => !q.correctAnswer)
+      if (semGabarito.length > 0) {
+        toast.warning(
+          `${semGabarito.length} questão(ões) sem gabarito identificado. Verifique o formato do GABARITO COMENTADO.`
+        )
+      }
+
+      setParsed(mappedQuestions)
+      toast.success(`${mappedQuestions.length} questões identificadas! Confira e clique em Importar.`)
     } finally {
       setParsing(false)
     }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    const semGabarito = finalQuestions.filter(q => !q.correctAnswer)
-    if (semGabarito.length > 0) {
-      toast.warning(
-        `${semGabarito.length} questão(ões) sem gabarito identificado. Verifique o formato do GABARITO COMENTADO.`
-      )
-    }
-
-    setParsed(finalQuestions)
-    toast.success(`${finalQuestions.length} questões identificadas! Confira e clique em Importar.`)
   }
 
   async function handleSave() {
@@ -436,7 +434,9 @@ export function Import() {
       if (error) throw error
 
       toast.success(`${toInsert.length} questões importadas com sucesso!`)
-      if (partId) {
+      if (embedded && onSuccess) {
+        onSuccess(toInsert.length)
+      } else if (partId) {
         navigate(`/study/${subId}/part/${partId}`)
       } else {
         navigate(`/study/${subId}`)
@@ -489,12 +489,21 @@ export function Import() {
     setPartName('')
   }
 
-  return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <Header title="Importar Questões" showBack />
-      <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-6 pb-10">
+  const innerContent = (
+    <>
+      {embedded && onCancel && (
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-foreground">Importar Questões</p>
+          <button
+            onClick={onCancel}
+            className="text-muted-foreground hover:text-foreground text-xs px-2 py-1 rounded border border-border"
+          >
+            ✕ Fechar
+          </button>
+        </div>
+      )}
 
-        {!parsed ? (
+      {!parsed ? (
           /* ── STEP 1: paste ── */
           <div className="flex flex-col gap-5">
 
@@ -734,6 +743,18 @@ export function Import() {
             </div>
           </div>
         )}
+    </>
+  )
+
+  if (embedded) {
+    return <div className="flex flex-col gap-0">{innerContent}</div>
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <Header title="Importar Questões" showBack />
+      <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-6 pb-10">
+        {innerContent}
       </main>
     </div>
   )

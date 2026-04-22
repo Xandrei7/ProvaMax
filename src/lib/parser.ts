@@ -275,17 +275,6 @@ function detectAssociatedText(block: string): string | null {
   return null
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Verifica se o bloco de uma match contém linhas de alternativas (a–e)
-// ──────────────────────────────────────────────────────────────────────────────
-function blockHasOptions(text: string, matchIdx: number, allMatches: RegExpMatchArray[]): boolean {
-  const m     = allMatches[matchIdx]
-  const nextM = allMatches[matchIdx + 1]
-  const start = (m.index ?? 0) + m[0].length
-  const end   = nextM?.index ?? text.length
-  return /^[ \t]*[a-eA-E][.)]\s+\S/m.test(text.slice(start, end))
-}
-
 function parseQuestionsSection(
   text: string,
   validNumbers: Set<number> = new Set(),
@@ -307,44 +296,20 @@ function parseQuestionsSection(
   const hasValidNumbers = validNumbers.size > 0
 
   // ── Encontrar a primeira questão REAL ──────────────────────────────────────
-  // Se há gabarito, ele é a âncora mais confiável para evitar falso início
-  // em listas internas do enunciado (ex.: enumeração em itens).
-  // Sem gabarito, usa detecção por bloco com alternativas.
-  // Fallback: primeiro match qualquer.
+  // Se há gabarito, usa a primeira questão presente nele como âncora.
+  // Sem gabarito, começa no primeiro match encontrado para evitar
+  // descartar questões por conteúdo textual durante o parsing.
   let firstRealIdx = hasValidNumbers
     ? allMatches.findIndex(m => validNumbers.has(parseInt(m[1], 10)))
-    : allMatches.findIndex((_, i) => blockHasOptions(text, i, allMatches))
+    : 0
 
-  if (firstRealIdx < 0 && !hasValidNumbers) {
-    firstRealIdx = allMatches.findIndex((_, i) => blockHasOptions(text, i, allMatches))
-  }
   if (firstRealIdx < 0) firstRealIdx = 0
 
   // ── Construir lista de matches válidos a partir da primeira questão real ───
-  // Inclui matches que têm alternativas OU cujo número está no gabarito.
-  // Se nenhum critério é aplicável (sem gabarito, sem alternativas), usa todos.
+  // Não filtra por conteúdo textual (alternativas/padrão do bloco) para não
+  // descartar questões legítimas durante o parsing.
   const candidatesFromFirstReal = allMatches.slice(firstRealIdx)
-
-  let matches = candidatesFromFirstReal.filter((m, relIdx) => {
-    const absIdx = firstRealIdx + relIdx
-    if (blockHasOptions(text, absIdx, allMatches)) return true
-    if (hasValidNumbers && validNumbers.has(parseInt(m[1], 10))) return true
-    return false
-  })
-
-  // Fallback: se o filtro zerou tudo, usa o slice sem filtro
-  if (matches.length === 0) {
-    matches = candidatesFromFirstReal
-  }
-
-  // Se o gabarito foi parcialmente identificado (ex.: formato alternativo),
-  // evita subcontagem severa de questões C/E sem alternativas explícitas.
-  if (hasValidNumbers && candidatesFromFirstReal.length > 0) {
-    const ratio = matches.length / candidatesFromFirstReal.length
-    if (ratio < 0.45) {
-      matches = candidatesFromFirstReal
-    }
-  }
+  let matches = candidatesFromFirstReal
 
   // ── Filtro monotônico (PC / importação em lote) ───────────────────────────
   // Garante que os números de questão aceitos sejam estritamente crescentes.

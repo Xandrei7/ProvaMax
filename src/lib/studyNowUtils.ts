@@ -725,6 +725,7 @@ export interface DayTaskOverrides {
   removed: string[]
   extras: AdminTaskData[]
   order: string[] | null
+  customLabels?: Record<string, string>
 }
 
 function dayOverridesKey(semana: number, dia: StudyDayKey): string {
@@ -734,10 +735,10 @@ function dayOverridesKey(semana: number, dia: StudyDayKey): string {
 export function loadDayOverrides(semana: number, dia: StudyDayKey): DayTaskOverrides {
   try {
     const raw = localStorage.getItem(dayOverridesKey(semana, dia))
-    if (!raw) return { edited: {}, removed: [], extras: [], order: null }
+    if (!raw) return { edited: {}, removed: [], extras: [], order: null, customLabels: {} }
     return JSON.parse(raw) as DayTaskOverrides
   } catch {
-    return { edited: {}, removed: [], extras: [], order: null }
+    return { edited: {}, removed: [], extras: [], order: null, customLabels: {} }
   }
 }
 
