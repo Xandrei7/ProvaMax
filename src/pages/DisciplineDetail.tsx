@@ -32,7 +32,7 @@ export function DisciplineDetail() {
         getSubjects(disciplineId),
         getQuestions({ disciplineId }),
         getSubjectParts(),
-        getTheoriesByDiscipline(disciplineId),
+        getTheoriesByDiscipline(disciplineId!),
       ])
       setDiscipline(disciplines.find(d => d.id === disciplineId) ?? null)
       setSubjects(subs)
