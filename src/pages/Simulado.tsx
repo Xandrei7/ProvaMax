@@ -32,6 +32,7 @@ interface StudyNowMiniSimuladoState {
   subjectIds?: string[]
   questionCount?: number
   timeMinutes?: number
+  questionType?: 'multiple_choice' | 'true_false'
 }
 
 // ─── Interleaving algorithm ─────────────────────────────────────────────────
@@ -131,6 +132,14 @@ export function Simulado() {
   const startedAtRef = useRef<number>(0)
   const questionsRef = useRef<Question[]>([])
   const autoStartFromStudyRef = useRef(false)
+
+  // Tipo de questão: forçado para múltipla escolha quando vem do StudyNow
+  const [questionType, setQuestionType] = useState<'multiple_choice' | 'true_false'>(() => {
+    const ns = location.state as StudyNowMiniSimuladoState | null
+    if (ns?.fromStudyNow) return 'multiple_choice'
+    return ns?.questionType ?? 'multiple_choice'
+  })
+
   simAnswersRef.current = simAnswers
   questionsRef.current = questions
 
@@ -223,8 +232,8 @@ export function Simulado() {
 
   // ── Básico ────────────────────────────────────────────────────────────────
   function getBasicPool() {
-    if (basicDiscs.size > 0) return allQuestions.filter(q => basicDiscs.has(q.discipline_id))
-    return allQuestions
+    const base = basicDiscs.size > 0 ? allQuestions.filter(q => basicDiscs.has(q.discipline_id)) : allQuestions
+    return base.filter(q => q.type === questionType)
   }
 
   function startBasico() {
@@ -236,7 +245,7 @@ export function Simulado() {
     }
     const collected: Question[] = []
     for (const discId of basicDiscs) {
-      const discPool = allQuestions.filter(q => q.discipline_id === discId)
+      const discPool = allQuestions.filter(q => q.discipline_id === discId && q.type === questionType)
       const target = basicDiscCounts.get(discId) ?? discPool.length
       collected.push(...shuffle(discPool).slice(0, Math.min(target, discPool.length)))
     }
@@ -245,7 +254,7 @@ export function Simulado() {
 
   // ── Avançado ─────────────────────────────────────────────────────────────
   function getAdvPool() {
-    let qs = allQuestions
+    let qs = allQuestions.filter(q => q.type === questionType)
     if (advDiscs.size > 0) qs = qs.filter(q => advDiscs.has(q.discipline_id))
     if (advSubjects.size > 0) qs = qs.filter(q => advSubjects.has(q.subject_id))
     return qs
@@ -276,7 +285,7 @@ export function Simulado() {
     let cappedTotal = 0
 
       for (const discId of discsToUse) {
-      let discQs = allQuestions.filter(q => q.discipline_id === discId)
+      let discQs = allQuestions.filter(q => q.discipline_id === discId && q.type === questionType)
       if (selectedSubjects.size > 0) discQs = discQs.filter(q => selectedSubjects.has(q.subject_id))
       if (hasPerDiscLimits && selectedDiscCounts.has(discId)) {
         const limit = selectedDiscCounts.get(discId)!
@@ -894,6 +903,19 @@ export function Simulado() {
               </div>
             </div>
 
+            {/* Tipo de questão */}
+            <div>
+              <h2 className="font-semibold mb-2">Tipo de questão</h2>
+              <select
+                value={questionType}
+                onChange={e => setQuestionType(e.target.value as 'multiple_choice' | 'true_false')}
+                className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="multiple_choice">Múltipla escolha</option>
+                <option value="true_false">Certo ou Errado</option>
+              </select>
+            </div>
+
             {basicMax === 0 ? (
               <p className="text-center text-sm text-muted-foreground py-4">Importe questões primeiro.</p>
             ) : (
@@ -1065,6 +1087,19 @@ export function Simulado() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Tipo de questão */}
+            <div>
+              <h2 className="font-semibold mb-2">Tipo de questão</h2>
+              <select
+                value={questionType}
+                onChange={e => setQuestionType(e.target.value as 'multiple_choice' | 'true_false')}
+                className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="multiple_choice">Múltipla escolha</option>
+                <option value="true_false">Certo ou Errado</option>
+              </select>
             </div>
 
             {advPool.length === 0 ? (

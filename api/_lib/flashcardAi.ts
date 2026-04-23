@@ -13,6 +13,8 @@ interface FlashcardAiInput {
   explanation?: string | null
   comment?: string | null
   legalBasis?: string | null
+  // Trecho do material didático (PDF em chunks) para enriquecer a frente/verso
+  chunkContext?: string
 }
 
 export interface GeneratedFlashcard {
@@ -138,6 +140,12 @@ function parseJson(content: string) {
   }
 }
 
+const CHUNK_HIGH_VALUE_RE = /prazo|qu[oó]rum|compet[eê]ncia|distin[cç][aã]o|exce[cç][aã]o|conceito|classifica[cç][aã]o|obrigat[oó]rio|vedado|proibido|exclusivo|privativo|maioria|aprova[cç][aã]o|rejei[cç][aã]o/i
+
+function chunkHasHighValue(chunk: string): boolean {
+  return CHUNK_HIGH_VALUE_RE.test(chunk)
+}
+
 function buildPrompt(input: {
   bank: string
   discipline: string
@@ -149,44 +157,59 @@ function buildPrompt(input: {
   userWrongAnswer: string
   explanation: string
   legalBasis: string
+  chunkContext?: string
 }) {
-  return `Voce e um gerador de flashcards de recuperacao ativa para concurso, com foco total em padrao de banca e memorizacao util.
+  const { chunkContext, ...dados } = input
+  const chunkSection = chunkContext
+    ? `\nMATERIAL DIDATICO RELEVANTE (use para enriquecer frente e verso, sem copiar diretamente):\n${chunkContext}\n`
+    : ''
 
-Sua tarefa e transformar UMA questao errada do usuario em UM flashcard altamente eficiente.
+  return `Voce e um gerador de flashcards de alta performance para concurso FCC, cargo Tecnico Legislativo - Assistente Legislativo da ALE-RR.
 
-OBJETIVO
-Gerar 1 flashcard por questao errada, com foco em:
-- recuperacao ativa
-- regra cobrada
-- pegadinha da banca
-- antidoto mental pratico
-- revisao rapida e util
+TAREFA: transformar UMA questao errada em UM flashcard de recuperacao ativa eficiente.
 
-MISSAO
-Voce NAO deve copiar o enunciado original.
-Voce deve extrair a REGRA que estava sendo cobrada e transformar isso em um flashcard que ajude o usuario a nunca mais errar esse padrao.
+REGRAS PARA A FRENTE (front_text):
+- NAO copiar o enunciado
+- Cobrar UMA ideia por vez
+- Respondivel em poucos segundos sem releitura
+- Maximo 120 caracteres
+- Use EXATAMENTE um dos 6 modelos abaixo (prioridade: prazo/quorum/competencia > distincao/excecao > lacuna > situacao FCC > associacao):
 
-ENTRADA
-Voce recebera:
-- banca
-- disciplina
-- assunto
-- tipo_da_questao
-- enunciado
-- alternativas
-- resposta_correta
-- resposta_marcada_pelo_usuario
-- comentario_gabarito
-- fundamento_legal
+MODELO 1 - LACUNA DIRIGIDA
+Quando a regra tem um nome/conceito central.
+Ex: "O principio orcamentario que veda materia estranha a LOA e o da ______."
 
-REGRAS OBRIGATORIAS
-1. Gere exatamente 1 flashcard por questao
-2. Frente = pergunta sobre a regra, sem copiar enunciado
-3. Verso = resposta curta + pegadinha + antidoto SE->ENTAO
-4. Linguagem objetiva
-5. Nao inventar dado fora da entrada
-6. Foco total no padrao FCC
+MODELO 2 - REGRA NUCLEAR (PRIORITARIO — use sempre que houver prazo, quorum ou competencia)
+Para regras objetivas, prazos, quoruns, competencias.
+Ex: "O veto presidencial pode ser derrubado por qual quorum?"
 
+MODELO 3 - COMPLETE A REGRA (PRIORITARIO — use sempre que houver numero ou prazo)
+Quando o ponto central e numero, prazo ou completar regra.
+Ex: "No processo legislativo, a medida provisoria tem prazo inicial de ____ dias."
+
+MODELO 4 - DISTINCAO COBRADA
+Quando a banca cobra confusao entre dois institutos.
+Ex: "Qual a diferenca central entre dispensa e inexigibilidade de licitacao?"
+
+MODELO 5 - SITUACAO CURTA FCC
+Quando a questao cobra identificar conceito por situacao.
+Ex: "Se a Administracao atua com foco em resultado e flexibilidade, ela se aproxima de qual modelo?"
+
+MODELO 6 - ASSOCIACAO OBJETIVA
+Quando cobra classificacao, atributo ou elemento de instituto.
+Ex: "O atributo do ato administrativo que permite execucao direta e qual?"
+
+REGRAS PARA O VERSO (max 200 chars cada):
+- back_answer: resposta direta, curta, seca, precisa
+- back_trap: pegadinha classica FCC relacionada (troca de sujeito, excecao por regra, termo absoluto)
+- back_antidote: formato obrigatorio "SE [condicao], ENTAO [regra/resultado]"
+
+PROIBICOES:
+- Nao criar pergunta vaga, aberta demais ou impossivel de responder em segundos
+- Nao copiar enunciado ou trecho longo na frente
+- Nao inventar dado fora da entrada
+- Nao criar resposta dissertativa
+${chunkSection}
 Formato de saida:
 {
   "front_text": "...",
@@ -196,7 +219,7 @@ Formato de saida:
 }
 
 Dados:
-${JSON.stringify(input, null, 2)}`
+${JSON.stringify(dados, null, 2)}`
 }
 
 export async function generateFlashcardWithAi(openai: OpenAI, input: FlashcardAiInput): Promise<GeneratedFlashcard> {
@@ -224,6 +247,9 @@ export async function generateFlashcardWithAi(openai: OpenAI, input: FlashcardAi
     return fallback
   }
 
+  const rawChunk = typeof input.chunkContext === 'string' ? input.chunkContext.slice(0, 1200) : undefined
+  const chunkContext = rawChunk && chunkHasHighValue(rawChunk) ? rawChunk : undefined
+
   const prompt = buildPrompt({
     bank,
     discipline,
@@ -235,6 +261,7 @@ export async function generateFlashcardWithAi(openai: OpenAI, input: FlashcardAi
     userWrongAnswer: wrongAnswer,
     explanation: explanation || 'Nao informado',
     legalBasis: legalBasis || 'Nao informado',
+    chunkContext,
   })
 
   let lastError: Error | null = null

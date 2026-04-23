@@ -109,6 +109,49 @@ async function resolveNameById(userScopedSupabase: unknown, table: 'disciplines'
   return safeString((data as { name?: unknown } | null)?.name)
 }
 
+// Busca chunks do material didático relevantes para enriquecer o contexto da IA
+// Prioridade: busca por texto completo na disciplina → fallback por assunto
+async function findChunkContext(supabase: unknown, disciplineName: string, subjectName: string, statement: string): Promise<string> {
+  const sb = supabase as any
+  let chunks: string[] = []
+
+  // Palavras-chave extraídas do enunciado (exclui termos genéricos de prova)
+  const stopwords = new Set(['sobre', 'qual', 'como', 'para', 'segundo', 'conforme', 'acordo', 'questao', 'alternativa', 'correta', 'assinale'])
+  const keywords = statement
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 4 && !stopwords.has(w))
+    .slice(0, 6)
+
+  if (keywords.length > 0) {
+    const tsQuery = keywords.join(' | ')
+    const discNorm = disciplineName.toUpperCase().replace(/\s+/g, ' ').trim().slice(0, 50)
+    const { data } = await sb
+      .from('document_chunks')
+      .select('content')
+      .or(`discipline.eq.${discNorm},discipline.ilike.%${discNorm}%`)
+      .textSearch('content', tsQuery)
+      .limit(4)
+    if (data?.length) chunks = (data as { content: string }[]).map(d => d.content)
+  }
+
+  // Fallback: busca apenas pelo assunto
+  if (chunks.length === 0 && subjectName) {
+    const { data } = await sb
+      .from('document_chunks')
+      .select('content')
+      .ilike('subject', `%${subjectName.slice(0, 40)}%`)
+      .limit(3)
+    if (data?.length) chunks = (data as { content: string }[]).map(d => d.content)
+  }
+
+  if (chunks.length === 0) return ''
+  return chunks.slice(0, 3).map(c => c.slice(0, 400)).join('\n\n')
+}
+
 async function resolveQuestionPayload(userScopedSupabase: unknown, body: GenerateFlashcardBody, questionId: string) {
   const sb = userScopedSupabase as any
 
@@ -312,6 +355,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const limitReached = await reachedDailyAiLimit(userScopedSupabase, user.id)
 
     if (OPENAI_API_KEY && !limitReached) {
+      // Busca contexto dos chunks do PDF para enriquecer a qualidade do flashcard
+      const chunkContext = await findChunkContext(userScopedSupabase, disciplineName, subjectName, question.statement)
       const openai = new OpenAI({ apiKey: OPENAI_API_KEY })
       flashcardData = await generateFlashcardWithAi(openai, {
         bank: safeString(body.bank) || 'FCC',
@@ -324,6 +369,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         userWrongAnswer,
         explanation: question.explanation,
         legalBasis: question.legalBasis,
+        chunkContext: chunkContext || undefined,
       })
       usedAI = true
     }

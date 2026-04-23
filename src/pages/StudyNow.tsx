@@ -470,6 +470,7 @@ export function StudyNow() {
           subjectIds: subjectIds.length > 0 ? subjectIds : undefined,
           questionCount: quantidade,
           timeMinutes: tempo,
+          questionType: 'multiple_choice',
         },
       })
       return
@@ -505,6 +506,7 @@ export function StudyNow() {
           subjectIds: daySubjectIds,
           questionCount: task.quantidade ?? 25,
           timeMinutes: extractTimeMinutesFromAssunto(task.assunto),
+          questionType: 'multiple_choice',
         },
       })
       return
@@ -525,6 +527,7 @@ export function StudyNow() {
             subjectIds,
             questionCount: task.quantidade ?? 60,
             timeMinutes: 90,
+            questionType: 'multiple_choice',
           },
         })
         return
@@ -549,6 +552,7 @@ export function StudyNow() {
             subjectIds,
             questionCount: task.quantidade ?? 50,
             timeMinutes: extractTimeMinutesFromAssunto(task.assunto),
+            questionType: 'multiple_choice',
           },
         })
         return

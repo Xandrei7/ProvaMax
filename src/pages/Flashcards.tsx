@@ -35,7 +35,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import type { Discipline, Flashcard, Subject } from '@/types'
 
 type Phase = 'overview' | 'reviewing' | 'finished'
-type ReviewMode = 'smart' | 'errors_only' | 'vespera' | 'hard_only' | 'critical' | 'simulado_errors' | 'study_now'
+type ReviewMode = 'smart' | 'errors_only' | 'vespera_cargo' | 'vespera_geral' | 'critical' | 'simulado_errors' | 'study_now' | 'nucleo_quente'
 type SessionSize = 10 | 20 | 40
 type DisplayMode = 'quick' | 'deep'
 type QuickSection = 'all' | 'new' | 'reviewing' | 'mastered' | 'simulado' | 'study'
@@ -85,66 +85,296 @@ function hasFccTrap(text: string): boolean {
   return FCC_TRAP_WORDS.some(kw => upper.includes(kw))
 }
 
+// ─── Classificação oficial do edital ALE-RR ────────────────────────────────
+// GERAIS: Língua Portuguesa, Legislação Institucional, Geografia/História de RR
+// ESPECÍFICOS: Constitucional, Administrativo, AFO, Adm.Pública, Proc.Legislativo, Legística
+
+function getDisciplineGroup(name: string): 'gerais' | 'especificos' | 'unknown' {
+  const n = name.toLowerCase()
+  // Conhecimentos Gerais
+  if (/portugu|l[íi]ngua\s*portugu/.test(n)) return 'gerais'
+  if (/legisla[çc][aã]o\s+institucional/.test(n)) return 'gerais'
+  if (/regimento\s+interno/.test(n)) return 'gerais'
+  if (/geografia|hist[oó]ria.*(roraima|rr)|roraima.*(hist[oó]ria|geografia)/.test(n)) return 'gerais'
+  // Conhecimentos Específicos
+  if (/constitucional/.test(n)) return 'especificos'
+  if (/administrativo/.test(n)) return 'especificos'
+  if (/or[çc]ament|financ[ei]|afo/.test(n)) return 'especificos'
+  if (/administra[çc][aã]o\s+p[úu]blica|gest[aã]o\s+p[úu]blica/.test(n)) return 'especificos'
+  if (/processo\s*legisl/.test(n)) return 'especificos'
+  if (/leg[íi]stica/.test(n)) return 'especificos'
+  return 'unknown'
+}
+
+// Peso Pareto por disciplina dentro do cargo Assistente Legislativo ALE-RR (FCC)
+function getDisciplineWeight(name: string): number {
+  const n = name.toLowerCase()
+  // Gerais — Legislação Institucional e Regimento têm peso máximo no cargo
+  if (/legisla[çc][aã]o\s+institucional|regimento\s+interno/.test(n)) return 10
+  if (/portugu|l[íi]ngua/.test(n)) return 9
+  if (/geografia|hist[oó]ria.*(roraima|rr)/.test(n)) return 7
+  // Específicos — Processo Legislativo e Legística são o núcleo do cargo
+  if (/processo\s*legisl/.test(n)) return 10
+  if (/leg[íi]stica/.test(n)) return 9
+  if (/constitucional/.test(n)) return 8
+  if (/administrativo/.test(n)) return 7
+  if (/or[çc]ament|financ[ei]|afo/.test(n)) return 6
+  if (/administra[çc][aã]o\s+p[úu]blica|gest[aã]o\s+p/.test(n)) return 5
+  return 3
+}
+
+// Peso Pareto por assunto/subassunto — nível 3 do método Pareto real
+function getSubjectWeight(disciplineName: string, subjectName: string): number {
+  const disc = disciplineName.toLowerCase()
+  const subj = subjectName.toLowerCase()
+
+  if (/portugu|l[íi]ngua/.test(disc)) {
+    if (/interpret|compreens/.test(subj)) return 10
+    if (/reescrit|transform/.test(subj)) return 10
+    if (/concordânc|concordanc/.test(subj)) return 9
+    if (/regênci|regenci/.test(subj)) return 9
+    if (/crase/.test(subj)) return 9
+    if (/pontua/.test(subj)) return 8
+    if (/conectiv|articulad/.test(subj)) return 8
+    if (/coordena|subordina|morfossintax/.test(subj)) return 8
+    if (/sinônim|antônim|parónim/.test(subj)) return 6
+    if (/figur|linguagem/.test(subj)) return 5
+    return 5
+  }
+
+  if (/legisla[çc][aã]o\s+institucional|regimento\s+interno/.test(disc)) {
+    if (/regimento interno/.test(subj)) return 10
+    if (/resolução.?015|resolucao.?015/.test(subj)) return 10
+    if (/lc.?373|373.?lc/.test(subj)) return 9
+    if (/constitu.*(roraima|rr)/.test(subj)) return 8
+    if (/[eé]tica|conduta/.test(subj)) return 7
+    return 7
+  }
+
+  if (/geografia|hist[oó]ria.*(roraima|rr)/.test(disc)) {
+    if (/ocupação territorial|criação|formação/.test(subj)) return 9
+    if (/ind[íi]gena|povos|terras/.test(subj)) return 8
+    if (/municip/.test(subj)) return 8
+    if (/geografi.*(fís|clim)|relev/.test(subj)) return 8
+    if (/econom/.test(subj)) return 7
+    return 6
+  }
+
+  if (/constitucional/.test(disc)) {
+    if (/direitos.*(fundament|humanos)|garantias/.test(subj)) return 10
+    if (/poder legislativo|congresso|câmara|senado/.test(subj)) return 10
+    if (/processo legislativo/.test(subj)) return 10
+    if (/fiscal|controle.*(orçament|financ)|cpi/.test(subj)) return 9
+    if (/atribui.*presid|presidente/.test(subj)) return 8
+    if (/organiz.*(político|admin)|federação/.test(subj)) return 8
+    if (/aplicabilidade|normas constitucion/.test(subj)) return 7
+    if (/cnj|fun[çc][oõ]es essenciais/.test(subj)) return 6
+    if (/partido/.test(subj)) return 6
+    return 6
+  }
+
+  if (/administrativo/.test(disc)) {
+    if (/ato administrativo/.test(subj)) return 10
+    if (/licita[çc]|licitac/.test(subj)) return 10
+    if (/dispensa|inexigibilidade/.test(subj)) return 9
+    if (/poderes admin/.test(subj)) return 9
+    if (/agentes públicos|agentes publicos|servidor/.test(subj)) return 9
+    if (/controle da admin|controle extern|controle intern/.test(subj)) return 8
+    if (/responsabilidade civil/.test(subj)) return 8
+    if (/organiz.*(admin)|descentraliz/.test(subj)) return 7
+    if (/lgpd/.test(subj)) return 6
+    return 6
+  }
+
+  if (/or[çc]ament|financ[ei]|afo/.test(disc)) {
+    if (/princípi.*orçament|principios/.test(subj)) return 10
+    if (/\bppa\b/.test(subj)) return 10
+    if (/\bldo\b/.test(subj)) return 10
+    if (/\bloa\b/.test(subj)) return 10
+    if (/receita|despesa|classif/.test(subj)) return 9
+    if (/ciclo orçament/.test(subj)) return 8
+    return 5
+  }
+
+  if (/administra[çc][aã]o\s+p[úu]blica|gest[aã]o\s+p/.test(disc)) {
+    if (/modelos|patrimonial|burocrát|gerencial|nova gestão/.test(subj)) return 10
+    if (/governan|governabilidade|accountability/.test(subj)) return 9
+    if (/estrutura.*organiz|departament/.test(subj)) return 9
+    if (/planejamento|dire[çc][aã]o|controle.*admin|avalia[çc][aã]o/.test(subj)) return 9
+    if (/governo eletrônico|e-gov|digital/.test(subj)) return 8
+    if (/gestão.*(resultado|desempenho)|resultado/.test(subj)) return 8
+    if (/indicad|desempenho|métrica/.test(subj)) return 8
+    if (/transparência|controle social|acesso à info/.test(subj)) return 8
+    return 6
+  }
+
+  if (/processo\s*legisl/.test(disc)) {
+    if (/cf.*(art|artigo)|constitui[çc].*federal/.test(subj)) return 10
+    if (/ce.*(art|artigo)|const.*(rr|roraima)/.test(subj)) return 10
+    return 8
+  }
+
+  if (/leg[íi]stica/.test(disc)) {
+    if (/lc.?95|lei.?complement.*95/.test(subj)) return 10
+    if (/lindb/.test(subj)) return 10
+    if (/decreto.?12\.?002|12002/.test(subj)) return 9
+    if (/decreto.?lei.?9\.?830|9830/.test(subj)) return 9
+    return 8
+  }
+
+  return 5
+}
+
+// ─── Fase da prova + tipo de card + anti-saturação ───────────────────────────
+
+function getDaysToExam(): number {
+  try {
+    const stored = localStorage.getItem('provamax_exam_date')
+    if (!stored) return 999
+    const diff = Math.ceil((new Date(stored).getTime() - Date.now()) / 86400000)
+    return Math.max(0, diff)
+  } catch { return 999 }
+}
+
+function getPhaseMultiplier(disciplineName: string, daysToExam: number): number {
+  if (daysToExam > 45) return 1.0
+  const n = disciplineName.toLowerCase()
+  if (daysToExam <= 20) {
+    if (/processo\s*legisl|leg[íi]stica/.test(n)) return 1.8
+    if (/legisla[çc][aã]o\s+institucional|regimento/.test(n)) return 1.7
+    if (/constitucional|administrativo/.test(n)) return 1.6
+    if (/portugu|l[íi]ngua/.test(n)) return 1.5
+    return 1.2
+  }
+  // 21–45 dias
+  if (/processo\s*legisl|leg[íi]stica/.test(n)) return 1.5
+  if (/legisla[çc][aã]o\s+institucional|regimento/.test(n)) return 1.4
+  if (/constitucional|portugu|l[íi]ngua/.test(n)) return 1.3
+  if (/administrativo/.test(n)) return 1.2
+  return 1.1
+}
+
+function getCardCoreTypeWeight(frontText: string): number {
+  if (/qu[oó]rum|maioria\s+(absoluta|simples|qualificada)|[23]\/[35]/i.test(frontText)) return 4
+  if (/\bprazo[s]?\b|\b\d+\s*dias?\b|\b\d+\s*horas?\b|\bvigência\b/i.test(frontText)) return 4
+  if (/\bcompetência[s]?\b|\batribui[çc][õo]es?\b|\bcompete\b|\bprivativa\b|\bexclusiva\b/i.test(frontText)) return 4
+  if (/\bdiferença\b|\bdistinção\b|\bdistinguir\b|\bversu[s]?\b/i.test(frontText)) return 3
+  if (/\bexce[çc][aã]o\b|\bvedado\b|\bproibido\b|\bsalvo\b/i.test(frontText)) return 3
+  if (/\bconceito\b|\bdefini[çc][aã]o\b|\bprincípio\b/i.test(frontText)) return 2
+  if (/\bclassifica[çc][aã]o\b|\btipo[s]?\b|\bespécie[s]?\b|\bmodalidade[s]?\b/i.test(frontText)) return 1.5
+  return 0
+}
+
+function applySaturationCap(sortedCards: Flashcard[], maxFraction: number): Flashcard[] {
+  if (sortedCards.length === 0) return sortedCards
+  const cap = Math.max(1, Math.round(sortedCards.length * maxFraction))
+  const counts = new Map<string, number>()
+  const main: Flashcard[] = []
+  const tail: Flashcard[] = []
+  for (const c of sortedCards) {
+    const n = counts.get(c.discipline_id) ?? 0
+    if (n < cap) { main.push(c); counts.set(c.discipline_id, n + 1) }
+    else tail.push(c)
+  }
+  return [...main, ...tail]
+}
+
 // ─── Fila Inteligente (O Cérebro do Sistema) ────────────────────────────────
 
-function buildEliteQueue(cards: Flashcard[], mode: ReviewMode, disciplineId: string): Flashcard[] {
+function buildEliteQueue(
+  cards: Flashcard[],
+  mode: ReviewMode,
+  disciplineId: string,
+  nameById: Map<string, string> = new Map(),
+  subjectNameById: Map<string, string> = new Map(),
+): Flashcard[] {
   const now = new Date()
+  const daysToExam = getDaysToExam()
 
-  let base = disciplineId !== 'all'
+  const base = disciplineId !== 'all'
     ? cards.filter(c => c.discipline_id === disciplineId)
     : cards
 
-  // Score de prioridade composto
+  // Score composto: erros + pegadinha FCC + urgência SRS + Pareto + estabilidade + fase + tipo
   const priorityScore = (c: Flashcard): number => {
+    const discName = nameById.get(c.discipline_id) ?? ''
+    const subjName = subjectNameById.get(c.subject_id ?? '') ?? ''
     let s = 0
-    s += c.times_wrong * 4              // erros = prioridade máxima
-    s += hasFccTrap(c.front_text) ? 3 : 0  // pegadinhas FCC = bônus
+    const isSimulado = c.source_type === 'simulado'
+    const isUnstable = c.times_correct > 0 && c.times_wrong > 0
+    // Erros — simulado tem peso maior; recorrente e instável elevam mais
+    s += c.times_wrong * (isSimulado ? 6 : 4)
+    if (c.times_wrong >= 3) s += 2
+    if (isSimulado && isUnstable) s += 3
+    // Pegadinha FCC detectada na frente
+    s += hasFccTrap(c.front_text) ? 3 : 0
+    // Urgência pelo intervalo SRS
     const interval = c.interval_days ?? 1
     if (interval <= 1) s += 6
     else if (interval <= 3) s += 3
     else if (interval <= 7) s += 1
+    // Pareto: disciplina (0–10) e assunto (0–10, peso 50%)
+    s += getDisciplineWeight(discName)
+    s += getSubjectWeight(discName, subjName) * 0.5
+    // Instabilidade: oscilação entre acerto e erro
+    if (isUnstable) s += 5
+    // Tipo de conteúdo do card (quórum, prazo, competência etc.)
+    s += getCardCoreTypeWeight(c.front_text)
+    // Multiplicador por fase da prova
+    s *= getPhaseMultiplier(discName, daysToExam)
     return s
   }
 
   if (mode === 'errors_only') {
-    // Só cards com erro, do mais errado para o menos errado
     return base
       .filter(c => c.times_wrong > 0 && c.status !== 'mastered')
       .sort((a, b) => b.times_wrong - a.times_wrong || priorityScore(b) - priorityScore(a))
   }
 
-  if (mode === 'hard_only') {
-    // Só difíceis (difficulty_score > 0.3)
+  if (mode === 'vespera_geral') {
+    // Véspera Gerais: SOMENTE Língua Portuguesa, Legislação Institucional, Geografia/História RR
     return base
-      .filter(c => getDifficultyScore(c) > 0.3 && c.status !== 'mastered')
-      .sort((a, b) => getDifficultyScore(b) - getDifficultyScore(a) || b.times_wrong - a.times_wrong)
+      .filter(c => c.status !== 'mastered')
+      .filter(c => getDisciplineGroup(nameById.get(c.discipline_id) ?? '') === 'gerais')
+      .map(c => ({ card: c, score: priorityScore(c) }))
+      .sort((a, b) => b.score - a.score)
+      .map(({ card }) => card)
   }
 
   if (mode === 'simulado_errors') {
-    // Erros cometidos em simulados (foco dedicado)
     return base
       .filter(c => c.source_type === 'simulado' && c.times_wrong > 0 && c.status !== 'mastered')
       .sort((a, b) => b.times_wrong - a.times_wrong || priorityScore(b) - priorityScore(a))
   }
 
-  if (mode === 'vespera') {
-    // Modo Véspera: todos os cards problemáticos, sem respeitar schedule
+  if (mode === 'vespera_cargo') {
+    // Véspera Específicos: SOMENTE Constitucional, Administrativo, AFO, Adm.Pública, Proc.Legislativo, Legística
     return base
       .filter(c => c.status !== 'mastered')
-      .filter(c => c.times_wrong > 0 || (c.interval_days ?? 1) <= 7 || c.times_seen > 2)
-      .map(c => ({ card: c, score: priorityScore(c) + (c.times_seen * 0.2) }))
+      .filter(c => getDisciplineGroup(nameById.get(c.discipline_id) ?? '') === 'especificos')
+      .map(c => ({ card: c, score: priorityScore(c) }))
       .sort((a, b) => b.score - a.score)
       .map(({ card }) => card)
   }
 
-  // Smart mode: VENCIDOS + ordenados por prioridade inteligente
+  if (mode === 'nucleo_quente') {
+    // Top 80 cards por score composto — modo mais agressivo de reta final
+    return base
+      .filter(c => c.status !== 'mastered')
+      .map(c => ({ card: c, score: priorityScore(c) }))
+      .sort((a, b) => b.score - a.score)
+      .map(({ card }) => card)
+      .slice(0, 80)
+  }
+
+  // Smart mode: cards vencidos ordenados por score composto
   const nonMastered = base.filter(c => c.status !== 'mastered')
   const due = nonMastered.filter(c => !c.next_review_at || new Date(c.next_review_at) <= now)
 
   if (due.length === 0) return []
 
-  // Ordena: erros > FCC traps > intervalo curto
-  return [...due].sort((a, b) => priorityScore(b) - priorityScore(a) || b.times_wrong - a.times_wrong)
+  const sorted = [...due].sort((a, b) => priorityScore(b) - priorityScore(a) || b.times_wrong - a.times_wrong)
+  return applySaturationCap(sorted, 0.35)
 }
 
 // ─── Componente ─────────────────────────────────────────────────────────────
@@ -261,19 +491,30 @@ export function Flashcards() {
   const simuladoCount = flashcards.filter(c => c.source_type === 'simulado').length
   const studyCount = flashcards.filter(c => c.source_type === 'study').length
   const errorsOnlyCount = eliteCards.filter(c => c.times_wrong > 0 && c.status !== 'mastered').length
-  const hardCount = eliteCards.filter(c => getDifficultyScore(c) > 0.3 && c.status !== 'mastered').length
+  // Véspera Específicos: SOMENTE Constitucional, Administrativo, AFO, Adm.Pública, Proc.Legislativo, Legística
+  const vesperaCargoCount = eliteCards.filter(
+    c => c.status !== 'mastered' && getDisciplineGroup(disciplineNameById.get(c.discipline_id) ?? '') === 'especificos',
+  ).length
   const simuladoErrorsCount = eliteCards.filter(
     c => c.source_type === 'simulado' && c.times_wrong > 0 && c.status !== 'mastered',
   ).length
-  const vesperaCount = eliteCards.filter(
-    c => c.status !== 'mastered' && (c.times_wrong > 0 || (c.interval_days ?? 1) <= 7),
+  // Véspera Gerais: SOMENTE Língua Portuguesa, Legislação Institucional, Geografia/História RR
+  const vesperaGeralCount = eliteCards.filter(
+    c => c.status !== 'mastered' && getDisciplineGroup(disciplineNameById.get(c.discipline_id) ?? '') === 'gerais',
   ).length
+  // Críticos: marcados manualmente + instáveis + recorrentes (≥3 erros)
   const criticalCount = (() => {
     try {
       const crits = new Set<string>(JSON.parse(localStorage.getItem('provamax_critical_qids') ?? '[]'))
-      return eliteCards.filter(c => crits.has(c.question_id)).length
+      return eliteCards.filter(c =>
+        crits.has(c.question_id) ||
+        (c.times_correct > 0 && c.times_wrong > 0 && c.status !== 'mastered') ||
+        (c.times_wrong >= 3 && c.status !== 'mastered'),
+      ).length
     } catch { return 0 }
   })()
+
+  const nucleoQuenteCount = Math.min(80, eliteCards.filter(c => c.status !== 'mastered').length)
 
   // ── "Estudar Agora" — composição da fila do dia ─────────────────────────────
   const studyNowData = useMemo(() => {
@@ -348,9 +589,14 @@ export function Flashcards() {
     if (mode === 'critical') {
       const crits = getCriticalIds()
       const base = discId !== 'all' ? flashcards.filter(c => c.discipline_id === discId) : flashcards
-      queue = base.filter(c => crits.has(c.question_id))
+      // Críticos = marcados manualmente + instáveis (oscilação acerto/erro) + erros recorrentes (≥3)
+      queue = base.filter(c =>
+        crits.has(c.question_id) ||
+        (c.times_correct > 0 && c.times_wrong > 0 && c.status !== 'mastered') ||
+        (c.times_wrong >= 3 && c.status !== 'mastered'),
+      )
     } else {
-      queue = buildEliteQueue(flashcards, mode, discId)
+      queue = buildEliteQueue(flashcards, mode, discId, disciplineNameById, subjectNameById)
     }
     if (queue.length === 0) {
       setPhase('finished')
@@ -525,8 +771,11 @@ export function Flashcards() {
                 <AlertTriangle size={11} /> Pegadinha FCC
               </span>
             )}
-            {activeReviewMode === 'vespera' && (
-              <span className="text-xs text-purple-500 font-semibold">Véspera</span>
+            {activeReviewMode === 'vespera_cargo' && (
+              <span className="text-xs text-purple-500 font-semibold">Véspera — Específicos</span>
+            )}
+            {activeReviewMode === 'vespera_geral' && (
+              <span className="text-xs text-indigo-500 font-semibold">Véspera — Gerais</span>
             )}
             {activeReviewMode === 'simulado_errors' && (
               <span className="text-xs text-sky-600 font-semibold">Erros de simulados</span>
@@ -534,6 +783,11 @@ export function Flashcards() {
             {activeReviewMode === 'study_now' && (
               <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
                 <Zap size={11} /> Estudar Agora
+              </span>
+            )}
+            {activeReviewMode === 'nucleo_quente' && (
+              <span className="text-xs text-orange-600 font-semibold flex items-center gap-1">
+                <Flame size={11} /> Núcleo Quente
               </span>
             )}
           </div>
@@ -794,23 +1048,23 @@ export function Flashcards() {
               </button>
 
               <button
-                onClick={() => startReview('vespera', reviewDiscipline)}
-                disabled={vesperaCount === 0}
+                onClick={() => startReview('vespera_cargo', reviewDiscipline)}
+                disabled={vesperaCargoCount === 0}
                 className="rounded-xl bg-purple-600 text-white px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
               >
                 <AlertTriangle size={16} />
-                <span>Véspera de Prova</span>
-                <span className="opacity-80">{vesperaCount} cards</span>
+                <span>Véspera Específicos</span>
+                <span className="opacity-80">{vesperaCargoCount} cards</span>
               </button>
 
               <button
-                onClick={() => startReview('hard_only', reviewDiscipline)}
-                disabled={hardCount === 0}
-                className="rounded-xl bg-orange-500 text-white px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
+                onClick={() => startReview('vespera_geral', reviewDiscipline)}
+                disabled={vesperaGeralCount === 0}
+                className="rounded-xl bg-indigo-600 text-white px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
               >
                 <Gauge size={16} />
-                <span>Só Difíceis</span>
-                <span className="opacity-80">{hardCount} cards</span>
+                <span>Véspera Geral</span>
+                <span className="opacity-80">{vesperaGeralCount} cards</span>
               </button>
 
               <button
@@ -821,6 +1075,17 @@ export function Flashcards() {
                 <Target size={16} />
                 <span>Erros de Simulados</span>
                 <span className="opacity-80">{simuladoErrorsCount} cards</span>
+              </button>
+
+              <button
+                onClick={() => startReview('nucleo_quente', reviewDiscipline)}
+                disabled={nucleoQuenteCount === 0}
+                className="col-span-2 rounded-xl px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
+                style={{ background: 'linear-gradient(135deg, #ea580c 0%, #dc2626 100%)', color: '#fff' }}
+              >
+                <Flame size={16} />
+                <span>Núcleo Quente</span>
+                <span className="opacity-80">top {nucleoQuenteCount} cards da reta final</span>
               </button>
 
               <button
