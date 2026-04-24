@@ -72,7 +72,7 @@ function AccuracyColor(p: number) {
 export function SimuladoDetail() {
   const { simuladoId } = useParams<{ simuladoId: string }>()
   const navigate = useNavigate()
-  const { recordAnswer } = useStudy()
+  const { recordAnswer, answers } = useStudy()
   const { user } = useAuth()
 
   const [simulado, setSimulado] = useState<SimuladoRecord | null>(null)
@@ -88,6 +88,7 @@ export function SimuladoDetail() {
   const [reviewAnswers, setReviewAnswers] = useState<ReviewAnswer[]>([])
   const [reviewSelected, setReviewSelected] = useState<string | null>(null)
   const [reviewSubmitted, setReviewSubmitted] = useState(false)
+  const [reviewQueue, setReviewQueue] = useState<WrongItem[]>([])
 
   useEffect(() => {
     if (!simuladoId || !user) return
@@ -139,7 +140,8 @@ export function SimuladoDetail() {
   const wrongItems: WrongItem[] = wrongSimQs
     .map(sq => {
       const question = questions.get(sq.question_id)
-      return question ? { sq, question } : null
+      const userAns = answers.find(a => a.questionId === sq.question_id && a.isCorrect)
+      return question && !userAns ? { sq, question } : null
     })
     .filter(Boolean) as WrongItem[]
 
@@ -149,10 +151,12 @@ export function SimuladoDetail() {
     setReviewAnswers([])
     setReviewSelected(null)
     setReviewSubmitted(false)
+    setReviewQueue([])
   }
 
   function startReviewSession() {
     resetReviewSession('reviewing')
+    setReviewQueue(wrongItems)
   }
 
   // Per-discipline breakdown — recompute correctness from normalized snapshot
@@ -196,7 +200,7 @@ export function SimuladoDetail() {
 
   // ── REVIEWING ────────────────────────────────────────────────────────────────
   if (phase === 'reviewing') {
-    const item = wrongItems[reviewIndex]
+    const item = reviewQueue[reviewIndex]
     if (!item) return null
     const { sq: reviewSq, question: reviewQ } = item
     const reviewQuestion: Question = { ...reviewQ, correct_answer: reviewSq.correct_answer }
@@ -225,12 +229,14 @@ export function SimuladoDetail() {
           sourceType: 'review',
           simuladoId: currentSimulado.id,
         }).catch(console.error)
+
+        setReviewQueue(prev => [...prev, item])
       }
     }
 
     function handleNextReview() {
       if (!reviewSubmitted) return
-      if (reviewIndex < wrongItems.length - 1) {
+      if (reviewIndex < reviewQueue.length - 1) {
         setReviewIndex(i => i + 1)
         setReviewSelected(null)
         setReviewSubmitted(false)
@@ -240,6 +246,19 @@ export function SimuladoDetail() {
       setReviewSelected(null)
       setReviewSubmitted(false)
       setPhase('review_result')
+    }
+
+    function handleSkipReview() {
+      if (reviewSubmitted) return
+      setReviewQueue(prev => [...prev, item])
+      
+      if (reviewIndex < reviewQueue.length) {
+        setReviewIndex(i => i + 1)
+        setReviewSelected(null)
+        setReviewSubmitted(false)
+      } else {
+        setPhase('review_result')
+      }
     }
 
     return (
@@ -255,26 +274,25 @@ export function SimuladoDetail() {
             <p className="text-sm font-semibold">Revisando erros</p>
             <p className="text-xs text-muted-foreground truncate">{currentSimulado.title}</p>
           </div>
-          <span className="text-xs text-muted-foreground">{reviewIndex + 1}/{wrongItems.length}</span>
+          <span className="text-xs text-muted-foreground">{reviewIndex + 1}/{reviewQueue.length}</span>
         </div>
         <div className="flex-1 mx-auto w-full max-w-lg px-4 py-4 pb-8">
-          <div className="mb-3"><ProgressBar value={reviewIndex} max={wrongItems.length} /></div>
+          <div className="mb-3"><ProgressBar value={reviewIndex} max={reviewQueue.length} /></div>
           <QuestionCard
             key={reviewQuestion.id}
             question={reviewQuestion}
             questionNumber={reviewIndex + 1}
-            totalQuestions={wrongItems.length}
+            totalQuestions={reviewQueue.length}
             selected={reviewSelected}
             submitted={reviewSubmitted}
             onSelect={setReviewSelected}
             onSubmit={handleSubmitReview}
             onNext={handleNextReview}
             onPrev={() => undefined}
-            onSkip={() => undefined}
+            onSkip={handleSkipReview}
             isFirst={reviewIndex === 0}
-            isLast={reviewIndex === wrongItems.length - 1}
+            isLast={reviewIndex === reviewQueue.length - 1}
             hidePrev
-            hideSkip
           />
         </div>
       </div>

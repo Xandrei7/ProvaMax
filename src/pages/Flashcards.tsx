@@ -5,10 +5,12 @@ import {
   BookOpen,
   Brain,
   Check,
+  ChevronUp,
   Clock3,
   Flame,
   Gauge,
   Layers,
+  MessageCircle,
   ShieldAlert,
   SkipForward,
   Star,
@@ -20,8 +22,10 @@ import {
 } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { BottomNav } from '@/components/BottomNav'
+import { QuestionChat } from '@/components/QuestionChat'
 import { getDisciplines, getFlashcards, getSubjects, reviewFlashcard } from '@/lib/dataService'
 import { buildStudyNowQueue, formatStudyNowLine } from '@/lib/flashcardStudyNow'
+import { buildProvaHojeQueue } from '@/lib/flashcardProvaHoje'
 import {
   applyPlanScope,
   getCurrentWeek,
@@ -35,7 +39,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import type { Discipline, Flashcard, Subject } from '@/types'
 
 type Phase = 'overview' | 'reviewing' | 'finished'
-type ReviewMode = 'smart' | 'errors_only' | 'vespera_cargo' | 'vespera_geral' | 'critical' | 'simulado_errors' | 'study_now' | 'nucleo_quente'
+type ReviewMode = 'prova_hoje' | 'errors_only' | 'vespera_cargo' | 'vespera_geral' | 'critical' | 'simulado_errors' | 'study_now' | 'nucleo_quente'
 type SessionSize = 10 | 20 | 40
 type DisplayMode = 'quick' | 'deep'
 type QuickSection = 'all' | 'new' | 'reviewing' | 'mastered' | 'simulado' | 'study'
@@ -409,7 +413,8 @@ export function Flashcards() {
   const [dueCards, setDueCards] = useState<Flashcard[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [showAnswer, setShowAnswer] = useState(false)
-  const [activeReviewMode, setActiveReviewMode] = useState<ReviewMode>('smart')
+  const [showChat, setShowChat] = useState(false)
+  const [activeReviewMode, setActiveReviewMode] = useState<ReviewMode>('prova_hoje')
   const [reviewError, setReviewError] = useState<string | null>(null)
 
   async function reloadFlashcards() {
@@ -447,7 +452,7 @@ export function Flashcards() {
   // Auto-inicia revisão quando chega com ?disciplineId= (ex.: vindo de StudyNow)
   useEffect(() => {
     if (loading || !initDisciplineId || flashcards.length === 0) return
-    startReview('smart', initDisciplineId)
+    startReview('prova_hoje', initDisciplineId)
   }, [loading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const disciplineNameById = useMemo(
@@ -481,10 +486,7 @@ export function Flashcards() {
   }, [flashcards, reviewDiscipline, reviewWindow, planScope])
 
   // ── Contadores (todos dependem de eliteCards para refletir a disciplina) ────
-  const now = new Date()
-  const dueCount = eliteCards.filter(
-    c => c.status !== 'mastered' && (!c.next_review_at || new Date(c.next_review_at) <= now),
-  ).length
+  const provaHojeCount = Math.min(80, flashcards.filter(c => c.status !== 'mastered').length)
   const newCount = eliteCards.filter(c => c.status === 'new').length
   const reviewingCount = eliteCards.filter(c => c.status === 'reviewing').length
   const masteredCount = eliteCards.filter(c => c.status === 'mastered').length
@@ -595,6 +597,8 @@ export function Flashcards() {
         (c.times_correct > 0 && c.times_wrong > 0 && c.status !== 'mastered') ||
         (c.times_wrong >= 3 && c.status !== 'mastered'),
       )
+    } else if (mode === 'prova_hoje') {
+      queue = buildProvaHojeQueue(flashcards, disciplineNameById)
     } else {
       queue = buildEliteQueue(flashcards, mode, discId, disciplineNameById, subjectNameById)
     }
@@ -643,6 +647,7 @@ export function Flashcards() {
         } catch {}
       }
       setShowAnswer(false)
+      setShowChat(false)
       if (action === 'wrong') {
         // Requeue card at end of session (Anki-style)
         setDueCards(prev => [...prev, card])
@@ -755,91 +760,127 @@ export function Flashcards() {
         </div>
 
         <main className="mx-auto w-full max-w-lg flex-1 px-4 py-6 pb-36 flex flex-col gap-4">
-          {/* Badges do card */}
-          <div className="flex flex-wrap gap-2 items-center">
-            <span className={`text-xs font-semibold flex items-center gap-1 ${cardDifficulty.color}`}>
-              <span className={`inline-block w-2 h-2 rounded-full ${cardDifficulty.dot}`} />
-              {cardDifficulty.label}
-            </span>
-            {currentCard.times_wrong > 0 && (
-              <span className="text-xs text-red-500 font-semibold flex items-center gap-1">
-                <X size={11} /> {currentCard.times_wrong} erro{currentCard.times_wrong > 1 ? 's' : ''}
-              </span>
-            )}
-            {isFccTrap && (
-              <span className="text-xs text-orange-500 font-semibold flex items-center gap-1">
-                <AlertTriangle size={11} /> Pegadinha FCC
-              </span>
-            )}
-            {activeReviewMode === 'vespera_cargo' && (
-              <span className="text-xs text-purple-500 font-semibold">Véspera — Específicos</span>
-            )}
-            {activeReviewMode === 'vespera_geral' && (
-              <span className="text-xs text-indigo-500 font-semibold">Véspera — Gerais</span>
-            )}
-            {activeReviewMode === 'simulado_errors' && (
-              <span className="text-xs text-sky-600 font-semibold">Erros de simulados</span>
-            )}
-            {activeReviewMode === 'study_now' && (
-              <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
-                <Zap size={11} /> Estudar Agora
-              </span>
-            )}
-            {activeReviewMode === 'nucleo_quente' && (
-              <span className="text-xs text-orange-600 font-semibold flex items-center gap-1">
-                <Flame size={11} /> Núcleo Quente
-              </span>
-            )}
-          </div>
+          {showChat ? (
+            <>
+              {/* Card minimizado — clica para restaurar */}
+              <button
+                onClick={() => setShowChat(false)}
+                className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left w-full hover:bg-muted/40 transition-colors"
+              >
+                <ChevronUp size={18} className="shrink-0 text-muted-foreground" />
+                <p className="text-sm font-semibold line-clamp-2 flex-1 leading-snug">{currentCard.front_text}</p>
+              </button>
 
-          {/* Frente do card */}
-          <div className="rounded-2xl border border-border bg-card p-6 min-h-[200px] flex items-center justify-center text-center">
-            <h2 className="text-lg font-semibold leading-relaxed">{currentCard.front_text}</h2>
-          </div>
-
-          {!showAnswer && (
-            <button
-              onClick={() => setShowAnswer(true)}
-              className="rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground hover:bg-primary/90"
-            >
-              Mostrar resposta
-            </button>
-          )}
-
-          {showAnswer && (
-            <div className="flex flex-col gap-3 animate-in fade-in duration-300">
-              {/* Resposta (sempre visível) */}
-              <div className="rounded-xl border border-border bg-card p-4">
-                <p className="text-sm font-semibold mb-1">Resposta direta</p>
-                <p className="text-sm text-muted-foreground">{currentCard.back_answer}</p>
+              {/* Chat inline */}
+              <QuestionChat question={{
+                id: currentCard.id,
+                statement: currentCard.front_text,
+                correct_answer: currentCard.back_answer,
+                comment: [
+                  currentCard.back_trap && `Pegadinha: ${currentCard.back_trap}`,
+                  currentCard.back_antidote && `Antídoto: ${currentCard.back_antidote}`,
+                ].filter(Boolean).join('\n\n'),
+                options: [],
+                discipline_id: currentCard.discipline_id,
+                subject_id: currentCard.subject_id,
+                discipline_name: disciplineNameById.get(currentCard.discipline_id) || '',
+                subject_name: subjectNameById.get(currentCard.subject_id) || '',
+              } as any} />
+            </>
+          ) : (
+            <>
+              {/* Badges do card */}
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className={`text-xs font-semibold flex items-center gap-1 ${cardDifficulty.color}`}>
+                  <span className={`inline-block w-2 h-2 rounded-full ${cardDifficulty.dot}`} />
+                  {cardDifficulty.label}
+                </span>
+                {currentCard.times_wrong > 0 && (
+                  <span className="text-xs text-red-500 font-semibold flex items-center gap-1">
+                    <X size={11} /> {currentCard.times_wrong} erro{currentCard.times_wrong > 1 ? 's' : ''}
+                  </span>
+                )}
+                {isFccTrap && (
+                  <span className="text-xs text-orange-500 font-semibold flex items-center gap-1">
+                    <AlertTriangle size={11} /> Pegadinha FCC
+                  </span>
+                )}
+                {activeReviewMode === 'prova_hoje' && (
+                  <span className="text-xs text-primary font-semibold flex items-center gap-1">
+                    <Trophy size={11} /> Prova Hoje
+                  </span>
+                )}
+                {activeReviewMode === 'vespera_cargo' && (
+                  <span className="text-xs text-purple-500 font-semibold">Véspera — Específicos</span>
+                )}
+                {activeReviewMode === 'vespera_geral' && (
+                  <span className="text-xs text-indigo-500 font-semibold">Véspera — Gerais</span>
+                )}
+                {activeReviewMode === 'simulado_errors' && (
+                  <span className="text-xs text-sky-600 font-semibold">Erros de simulados</span>
+                )}
+                {activeReviewMode === 'study_now' && (
+                  <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
+                    <Zap size={11} /> Estudar Agora
+                  </span>
+                )}
+                {activeReviewMode === 'nucleo_quente' && (
+                  <span className="text-xs text-orange-600 font-semibold flex items-center gap-1">
+                    <Flame size={11} /> Núcleo Quente
+                  </span>
+                )}
               </div>
 
-              {/* Modo Profundo: mostra pegadinha e antídoto */}
-              {!isQuick && (
-                <>
-                  <div className="rounded-xl border border-red-500/25 bg-red-500/5 p-4">
-                    <div className="flex items-center gap-2 mb-1">
-                      <ShieldAlert size={15} className="text-red-500" />
-                      <p className="text-sm font-semibold text-red-500">A pegadinha</p>
-                    </div>
-                    <p className="text-sm text-red-900/80 dark:text-red-100/80">{currentCard.back_trap}</p>
-                  </div>
+              {/* Frente do card */}
+              <div className="rounded-2xl border border-border bg-card p-6 min-h-[200px] flex items-center justify-center text-center">
+                <h2 className="text-lg font-semibold leading-relaxed">{currentCard.front_text}</h2>
+              </div>
 
-                  <div className="rounded-xl border border-green-500/25 bg-green-500/5 p-4">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Zap size={15} className="text-green-500" />
-                      <p className="text-sm font-semibold text-green-600">Antídoto (SE → ENTÃO)</p>
-                    </div>
-                    <p className="text-sm text-green-900/80 dark:text-green-100/80">{currentCard.back_antidote}</p>
-                  </div>
-                </>
+              {!showAnswer && (
+                <button
+                  onClick={() => setShowAnswer(true)}
+                  className="rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  Mostrar resposta
+                </button>
               )}
 
-              {/* Próxima revisão estimada */}
-              <p className="text-center text-xs text-muted-foreground">
-                Intervalo atual: {Math.round(currentCard.interval_days ?? 1)}d · ease: {(currentCard.ease_factor ?? 2.5).toFixed(1)}
-              </p>
-            </div>
+              {showAnswer && (
+                <div className="flex flex-col gap-3 animate-in fade-in duration-300">
+                  {/* Resposta (sempre visível) */}
+                  <div className="rounded-xl border border-border bg-card p-4">
+                    <p className="text-sm font-semibold mb-1">Resposta direta</p>
+                    <p className="text-sm text-muted-foreground">{currentCard.back_answer}</p>
+                  </div>
+
+                  {/* Modo Profundo: mostra pegadinha e antídoto */}
+                  {!isQuick && (
+                    <>
+                      <div className="rounded-xl border border-red-500/25 bg-red-500/5 p-4">
+                        <div className="flex items-center gap-2 mb-1">
+                          <ShieldAlert size={15} className="text-red-500" />
+                          <p className="text-sm font-semibold text-red-500">A pegadinha</p>
+                        </div>
+                        <p className="text-sm text-red-900/80 dark:text-red-100/80">{currentCard.back_trap}</p>
+                      </div>
+
+                      <div className="rounded-xl border border-green-500/25 bg-green-500/5 p-4">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Zap size={15} className="text-green-500" />
+                          <p className="text-sm font-semibold text-green-600">Antídoto (SE → ENTÃO)</p>
+                        </div>
+                        <p className="text-sm text-green-900/80 dark:text-green-100/80">{currentCard.back_antidote}</p>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Próxima revisão estimada */}
+                  <p className="text-center text-xs text-muted-foreground">
+                    Intervalo atual: {Math.round(currentCard.interval_days ?? 1)}d · ease: {(currentCard.ease_factor ?? 2.5).toFixed(1)}
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </main>
 
@@ -883,15 +924,16 @@ export function Flashcards() {
                 </button>
               </div>
               <button
-                onClick={() => handleReviewAction('easy')}
-                disabled={updating}
-                className="rounded-lg border border-primary/30 bg-primary/5 text-primary py-2 text-sm font-semibold disabled:opacity-50"
+                onClick={() => setShowChat(true)}
+                className="rounded-lg border border-blue-500/30 bg-blue-500/5 text-blue-600 dark:text-blue-400 py-2 text-sm font-semibold"
               >
-                <span className="inline-flex items-center gap-2"><Zap size={14} /> Muito fácil (aumenta intervalo)</span>
+                <span className="inline-flex items-center gap-2"><MessageCircle size={14} /> Tirar dúvida</span>
               </button>
             </div>
           </div>
         )}
+
+
       </div>
     )
   }
@@ -966,7 +1008,7 @@ export function Flashcards() {
 
             {studyNowData.total === 0 && (
               <p className="text-center text-xs mt-3" style={{ color: '#475569' }}>
-                Nenhum card urgente no momento. Volte mais tarde ou use a Revisão Inteligente.
+                Nenhum card urgente no momento. Volte mais tarde ou use o Prova Hoje.
               </p>
             )}
           </div>
@@ -1028,13 +1070,13 @@ export function Flashcards() {
             {/* 4 modos de revisão */}
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => startReview('smart', reviewDiscipline)}
-                disabled={dueCount === 0}
+                onClick={() => startReview('prova_hoje', reviewDiscipline)}
+                disabled={provaHojeCount === 0}
                 className="rounded-xl bg-primary text-primary-foreground px-3 py-3 text-xs font-semibold disabled:opacity-40 flex flex-col items-center gap-1"
               >
                 <Target size={16} />
-                <span>Revisão Inteligente</span>
-                <span className="opacity-80">{dueCount} agendados</span>
+                <span>Prova Hoje</span>
+                <span className="opacity-80">{provaHojeCount} cards</span>
               </button>
 
               <button
@@ -1316,7 +1358,7 @@ export function Flashcards() {
                       <button
                         onClick={() => {
                           setReviewDiscipline(item.disciplineId)
-                          startReview('smart', item.disciplineId)
+                          startReview('prova_hoje', item.disciplineId)
                         }}
                         className="text-[10px] rounded-full border border-primary/30 text-primary px-2 py-0.5"
                       >

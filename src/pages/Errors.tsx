@@ -44,6 +44,7 @@ export function Errors() {
   }, [isSimuladoScoped, scopedQuestionIds, answers])
 
   useEffect(() => {
+    if (reviewing) return
     async function load() {
       const wrongIds = questionIdsForReview
       if (wrongIds.length === 0) {
@@ -57,7 +58,7 @@ export function Errors() {
       setLoading(false)
     }
     load()
-  }, [questionIdsForReview])
+  }, [questionIdsForReview, reviewing])
 
   function startReview() {
     setCurrentIndex(0)
@@ -73,6 +74,14 @@ export function Errors() {
     setSelected(null)
     setSubmitted(false)
   }, [])
+
+  const handleSkip = useCallback(() => {
+    const q = questions[currentIndex]
+    if (q) {
+      setQuestions(prev => [...prev, q])
+    }
+    goToIndex(currentIndex + 1)
+  }, [currentIndex, questions, goToIndex])
 
   const handleSubmit = useCallback(() => {
     const q = questions[currentIndex]
@@ -96,8 +105,18 @@ export function Errors() {
         selectedAnswer: selected,
         ...flashcardSource,
       }).catch(console.error)
+
+      setQuestions(prev => [...prev, q])
+    } else {
+      if (isSimuladoScoped && locationState?.questionIds) {
+        const newIds = locationState.questionIds.filter(id => id !== q.id)
+        navigate(location.pathname, {
+          replace: true,
+          state: { ...locationState, questionIds: newIds }
+        })
+      }
     }
-  }, [selected, questions, currentIndex, submitted, recordAnswer, isSimuladoScoped, scopedSimuladoId])
+  }, [selected, questions, currentIndex, submitted, recordAnswer, isSimuladoScoped, scopedSimuladoId, locationState, navigate, location.pathname])
 
   const currentQuestion = questions[currentIndex]
 
@@ -166,7 +185,7 @@ export function Errors() {
               else goToIndex(currentIndex + 1)
             }}
             onPrev={() => goToIndex(Math.max(0, currentIndex - 1))}
-            onSkip={() => goToIndex(Math.min(questions.length - 1, currentIndex + 1))}
+            onSkip={handleSkip}
             isFirst={currentIndex === 0}
             isLast={currentIndex === questions.length - 1}
           />
